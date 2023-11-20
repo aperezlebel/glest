@@ -1,0 +1,111 @@
+[project]
+name = "glest"
+description = "Estimate the grouping loss of your probabilistic classifiers."
+authors = [
+    { name = "Alexandre Perez-Lebel", email = "alexandre.perez@inria.fr" },
+]
+readme = "README.md"
+requires-python = ">=3.7"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "numpy",
+    "scikit-learn",
+    "matplotlib",
+]
+dynamic = ["version"]
+
+[project.optional-dependencies]
+dev = [
+    "pre-commit",
+    "nox",
+]
+test = [
+    "pytest",
+    "pytest-cov",
+]
+oldest_deps = [
+    "numpy==1.22",
+    "scikit-learn==1.1.3",
+    "pandas==1.5.1",
+]
+doc = [
+    "sphinx",
+    "pydata-sphinx-theme",
+    "sphinx-gallery",
+    "matplotlib",
+    "pillow",  # to scrape images from the examples
+]
+
+[project.urls]
+"Homepage" = "https://github.com/aperezlebel/gl_estimation"
+"Bug Tracker" = "https://github.com/aperezlebel/gl_estimation/issues"
+
+[build-system]
+build-backend = "flit_core.buildapi"
+requires = ["flit_core"]
+
+[tool.black]
+line-length = 88
+target_version = ['py38', 'py39', 'py310', 'py311']
+preview = true
+exclude = '''
+/(
+    \.eggs         # exclude a few common directories in the
+  | \.git          # root of the project
+  | \.mypy_cache
+  | \.vscode
+  | build
+  | dist
+)/
+'''
+
+[tool.ruff]
+# Enable pycodestyle (`E`) and Pyflakes (`F`) codes by default.
+select = ["E", "F"]
+ignore = []
+
+# Allow autofix for all enabled rules (when `--fix`) is provided.
+fixable = ["A", "B", "C", "D", "E", "F", "G", "I", "N", "Q", "S", "T", "W", "ANN", "ARG", "BLE", "COM", "DJ", "DTZ", "EM", "ERA", "EXE", "FBT", "ICN", "INP", "ISC", "NPY", "PD", "PGH", "PIE", "PL", "PT", "PTH", "PYI", "RET", "RSE", "RUF", "SIM", "SLF", "TCH", "TID", "TRY", "UP", "YTT"]
+unfixable = []
+
+# Exclude a variety of commonly ignored directories.
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+    "doc",
+]
+per-file-ignores = {}
+
+# Same as Black.
+line-length = 88
+
+# Allow unused variables when underscore-prefixed.
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+target-version = "py39"
+
+[tool.ruff.mccabe]
+max-complexity = 10
