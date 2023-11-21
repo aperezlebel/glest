@@ -1,0 +1,9 @@
+name: myenv
+channels:
+  - defaults
+dependencies:
+  - numpy
+  - scikit-learn
+  - matplotlib
+  - pip:
+    - git+https://github.com/aperezlebel/glest.git#egg=glest
