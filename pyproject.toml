@@ -41,8 +41,8 @@ doc = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/aperezlebel/gl_estimation"
-"Bug Tracker" = "https://github.com/aperezlebel/gl_estimation/issues"
+"Homepage" = "https://github.com/aperezlebel/glest"
+"Bug Tracker" = "https://github.com/aperezlebel/glest/issues"
 
 [build-system]
 build-backend = "flit_core.buildapi"
