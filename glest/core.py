@@ -11,6 +11,7 @@ from .helpers import (
     scores_to_bin_ids,
     estimate_GL_induced,
     grouping_loss_lower_bound,
+    grouping_loss_bias,
     list_list_to_array,
     bins_from_strategy,
 )
@@ -567,26 +568,65 @@ class GLEstimator:
         counts = list_list_to_array(counts, fill_value=0, dtype=int)
         mean_scores = list_list_to_array(mean_scores, fill_value=0)
 
-        lower_bound_debiased, bias = grouping_loss_lower_bound(
-            frac_pos, counts, reduce_bin=True, debiased=True, return_bias=True
-        )
-
-        self.GL_uncorrected_ = lower_bound_debiased + bias
-
-        c_hat = CEstimator(y_scores, y).c_hat()
-        GL_ind = estimate_GL_induced(c_hat, y_scores, self.partitioner_.bins_)
-
-        lower_bound_debiased -= GL_ind
-
         self.frac_pos_ = frac_pos
         self.counts_ = counts
         self.mean_scores_ = mean_scores
 
-        self.GL_ = lower_bound_debiased
-        self.GL_ind_ = GL_ind
-        self.GL_bias_ = bias
+        self.c_hat_ = CEstimator(y_scores, y).c_hat()
+        self.y_bins_, _ = scores_to_bin_ids(y_scores, self.partitioner_.bins_, None)
 
         return self
+
+    def GL(self, psr: str = "brier"):
+        return self.GL_uncorrected(psr) - self.GL_bias(psr) - self.GL_induced(psr)
+
+    def GL_uncorrected(self, psr: str = "brier"):
+        if not self.is_fitted():
+            raise ValueError("GLEstimator is not fitted.")
+
+        return grouping_loss_lower_bound(
+            self.frac_pos_,
+            self.counts_,
+            reduce_bin=True,
+            debiased=False,
+        )
+
+    def GL_bias(self, psr: str = "brier"):
+        if not self.is_fitted():
+            raise ValueError("GLEstimator is not fitted.")
+
+        return np.nan_to_num(
+            grouping_loss_bias(self.frac_pos_, self.counts_, reduce_bin=True)
+        )
+
+    def GL_induced(self, psr: str = "brier"):
+        if not self.is_fitted():
+            raise ValueError("GLEstimator is not fitted.")
+
+        return estimate_GL_induced(self.c_hat_, self.y_bins_)
+
+    def metrics(self, psr: str = "brier"):
+        available_metrics = ["brier"]
+
+        if psr not in available_metrics:
+            raise ValueError(f'Unknown metric "{psr}". Choices: {available_metrics}.')
+
+        if not self.is_fitted():
+            raise ValueError('GLEstimator must be fitted to call "metrics".')
+
+        if psr == "brier":
+            GL_ind = self.GL_induced(psr)
+            GL_uncorrected = self.GL_uncorrected(psr)
+            GL_bias = self.GL_bias(psr)
+            GL = GL_uncorrected - GL_bias - GL_ind
+
+        return {
+            "psr": psr,
+            "GL": GL,
+            "GL_induced": GL_ind,
+            "GL_uncorrected": GL_uncorrected,
+            "GL_bias": GL_bias,
+        }
 
     def plot(
         self,
@@ -674,26 +714,36 @@ class GLEstimator:
 
     def is_fitted(self):
         return (
-            hasattr(self, "GL_")
-            and hasattr(self, "GL_uncorrected_")
-            and hasattr(self, "GL_bias_")
-            and hasattr(self, "GL_ind_")
+            hasattr(self, "frac_pos_")
+            and hasattr(self, "counts_")
+            and hasattr(self, "mean_scores_")
+            and hasattr(self, "c_hat_")
+            and hasattr(self, "y_bins_")
         )
 
-    def __repr__(self) -> str:
+    def __format__(self, psr: str) -> str:
         """Print the computed metrics."""
         s = "GLEstimator()"
 
         if self.is_fitted():
+            if not psr:
+                psr = "brier"
+
+            metrics = self.metrics(psr)
+
             extra = (
-                f"  Grouping loss     : {self.GL_:.4f}\n"
-                f"   ↳ Uncorrected GL : {self.GL_uncorrected_:.4f}\n"
-                f"   ↳ Bias           : {self.GL_bias_:.4f}\n"
-                f"   ↳ Binning induced: {self.GL_ind_:.4f}\n"
+                f"  Scoring Rule      : {psr}\n"
+                f"  Grouping loss     : {metrics['GL']:.4f}\n"
+                f"   ↳ Uncorrected GL : {metrics['GL_uncorrected']:.4f}\n"
+                f"   ↳ Bias           : {metrics['GL_bias']:.4f}\n"
+                f"   ↳ Binning induced: {metrics['GL_induced']:.4f}\n"
             )
             s = f"{s}\n{extra}"
 
         return s
+
+    def __str__(self) -> str:
+        return f"{self}"
 
 
 class GLEstimatorCV:
@@ -736,29 +786,25 @@ class GLEstimatorCV:
         self.random_state = random_state
         self.verbose = verbose
 
-    @property
-    def GL_(self):
+    def GL(self, psr: str = "brier"):
         if not self.is_fitted():
             raise ValueError("GLEstimatorCV is not fitted.")
-        return [glest.GL_ for glest in self.glests_]
+        return [glest.GL(psr) for glest in self.glests_]
 
-    @property
-    def GL_uncorrected_(self):
+    def GL_uncorrected(self, psr: str = "brier"):
         if not self.is_fitted():
             raise ValueError("GLEstimatorCV is not fitted.")
-        return [glest.GL_uncorrected_ for glest in self.glests_]
+        return [glest.GL_uncorrected(psr) for glest in self.glests_]
 
-    @property
-    def GL_bias_(self):
+    def GL_bias(self, psr: str = "brier"):
         if not self.is_fitted():
             raise ValueError("GLEstimatorCV is not fitted.")
-        return [glest.GL_bias_ for glest in self.glests_]
+        return [glest.GL_bias(psr) for glest in self.glests_]
 
-    @property
-    def GL_ind_(self):
+    def GL_induced(self, psr: str = "brier"):
         if not self.is_fitted():
             raise ValueError("GLEstimatorCV is not fitted.")
-        return [glest.GL_ind_ for glest in self.glests_]
+        return [glest.GL_ind(psr) for glest in self.glests_]
 
     def fit(self, X, y, groups=None):
         """Fit a GLEstimator instance on each of the train/test split yield
@@ -798,13 +844,14 @@ class GLEstimatorCV:
             glests.append(glest)
 
         self.glests_ = glests
+        self.cv_ = cv
 
         return self
 
     def is_fitted(self):
         return hasattr(self, "glests_")
 
-    def __repr__(self) -> str:
+    def __format__(self, psr: str) -> str:
         """Print the computed average metrics with variance."""
         s = "GLEstimatorCV()"
 
@@ -814,12 +861,20 @@ class GLEstimatorCV:
             return f"{mean:.4f} ({std:.4f})"
 
         if self.is_fitted():
+            if not psr:
+                psr = "brier"
+
             extra = (
-                f"  Grouping loss     : {format_trials(self.GL_)}\n"
-                f"   ↳ Uncorrected GL : {format_trials(self.GL_uncorrected_)}\n"
-                f"   ↳ Bias           : {format_trials(self.GL_bias_)}\n"
-                f"   ↳ Binning induced: {format_trials(self.GL_ind_)}\n"
+                # f"  Splits            : {self.cv_}\n"
+                f"  Scoring rule      : {psr}\n"
+                f"  Grouping loss     : {format_trials(self.GL())}\n"
+                f"   ↳ Uncorrected GL : {format_trials(self.GL_uncorrected())}\n"
+                f"   ↳ Bias           : {format_trials(self.GL_bias())}\n"
+                f"   ↳ Binning induced: {format_trials(self.GL_induced())}\n"
             )
             s = f"{s}\n{extra}"
 
         return s
+
+    def __str__(self) -> str:
+        return f"{self}"

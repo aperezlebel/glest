@@ -236,10 +236,12 @@ def test_glest_cv(classifier, data):
     glest_cv = GLEstimatorCV(classifier, "decision_tree", random_state=0, verbose=10)
     glest_cv.fit(X, y)
     print(glest_cv)
+    print(f"{glest_cv:brier}")
 
 
-def test_repr(glest):
+def test_str(glest):
     print(glest)
+    print(f"{glest:brier}")
 
 
 def test_manual_partition(data, classifier):

@@ -172,11 +172,8 @@ class CEstimator:
         return self._c_hat(self.y_scores.reshape(-1, 1))
 
 
-def estimate_GL_induced(c_hat, y_scores, bins):
+def estimate_GL_induced(c_hat, y_bins):
     """Estimate GL induced for the Brier score."""
-    n_bins = len(bins) - 1
-    y_bins = np.digitize(y_scores, bins=bins) - 1
-    y_bins = np.clip(y_bins, a_min=None, a_max=n_bins - 1)
 
     uniques, counts = np.unique(y_bins, return_counts=True)
     var = []
