@@ -247,8 +247,34 @@ def grouping_loss_lower_bound(
 
 
 def psr_name_to_entropy(psr: str):
+    """Get the entropy of a scoring rule.
+
+    Parameters
+    ----------
+    psr : str | Callable
+        The name of the scoring rule in {"brier", "log"}. Or its entropy
+        given as a callable `lambda p: entropy(p)`.
+
+    Returns
+    -------
+    Callable
+        The entropy of the scoring rule.
+
+    Raises
+    ------
+    ValueError
+        If psr is a string but not in the available methods.
+    ValueError
+        If psr is neither a valid string nor a callable.
+
+    """
+    available_metrics = ["brier", "log"]
+
     if callable(psr):
         return psr
+
+    elif psr not in available_metrics:
+        raise ValueError(f'Unknown metric "{psr}". Choices: {available_metrics}.')
 
     elif psr == "brier":
         return lambda x: 2 * x * (1 - x)
@@ -271,7 +297,7 @@ def compute_GL_uncorrected(frac_pos, counts, psr: str = "brier"):
 
 def compute_GL_bias(frac_pos, counts, psr: str = "brier"):
     if psr != "brier":
-        print('GL_bias computation is only available for "brier" psr.')
+        print('Warning: GL bias computation is only available for "brier" psr.')
         return np.nan
     return np.nan_to_num(grouping_loss_bias(frac_pos, counts, reduce_bin=True))
 

@@ -585,34 +585,28 @@ class GLEstimator:
         if not self.is_fitted():
             raise ValueError("GLEstimator is not fitted.")
 
-        return compute_GL_uncorrected(self.frac_pos_, self.counts_)
+        return compute_GL_uncorrected(self.frac_pos_, self.counts_, psr)
 
     def GL_bias(self, psr: str = "brier"):
         if not self.is_fitted():
             raise ValueError("GLEstimator is not fitted.")
 
-        return compute_GL_bias(self.frac_pos_, self.counts_)
+        return compute_GL_bias(self.frac_pos_, self.counts_, psr)
 
     def GL_induced(self, psr: str = "brier"):
         if not self.is_fitted():
             raise ValueError("GLEstimator is not fitted.")
 
-        return compute_GL_induced(self.c_hat_, self.y_bins_)
+        return compute_GL_induced(self.c_hat_, self.y_bins_, psr)
 
     def metrics(self, psr: str = "brier"):
-        available_metrics = ["brier"]
-
-        if psr not in available_metrics:
-            raise ValueError(f'Unknown metric "{psr}". Choices: {available_metrics}.')
-
         if not self.is_fitted():
             raise ValueError('GLEstimator must be fitted to call "metrics".')
 
-        if psr == "brier":
-            GL_ind = self.GL_induced(psr)
-            GL_uncorrected = self.GL_uncorrected(psr)
-            GL_bias = self.GL_bias(psr)
-            GL = GL_uncorrected - GL_bias - GL_ind
+        GL_ind = self.GL_induced(psr)
+        GL_uncorrected = self.GL_uncorrected(psr)
+        GL_bias = self.GL_bias(psr)
+        GL = GL_uncorrected - GL_bias - GL_ind
 
         return {
             "psr": psr,
@@ -783,22 +777,22 @@ class GLEstimatorCV:
     def GL(self, psr: str = "brier"):
         if not self.is_fitted():
             raise ValueError("GLEstimatorCV is not fitted.")
-        return [glest.GL(psr) for glest in self.glests_]
+        return np.array([glest.GL(psr) for glest in self.glests_])
 
     def GL_uncorrected(self, psr: str = "brier"):
         if not self.is_fitted():
             raise ValueError("GLEstimatorCV is not fitted.")
-        return [glest.GL_uncorrected(psr) for glest in self.glests_]
+        return np.array([glest.GL_uncorrected(psr) for glest in self.glests_])
 
     def GL_bias(self, psr: str = "brier"):
         if not self.is_fitted():
             raise ValueError("GLEstimatorCV is not fitted.")
-        return [glest.GL_bias(psr) for glest in self.glests_]
+        return np.array([glest.GL_bias(psr) for glest in self.glests_])
 
     def GL_induced(self, psr: str = "brier"):
         if not self.is_fitted():
             raise ValueError("GLEstimatorCV is not fitted.")
-        return [glest.GL_induced(psr) for glest in self.glests_]
+        return np.array([glest.GL_induced(psr) for glest in self.glests_])
 
     def fit(self, X, y, groups=None):
         """Fit a GLEstimator instance on each of the train/test split yield
@@ -845,6 +839,23 @@ class GLEstimatorCV:
     def is_fitted(self):
         return hasattr(self, "glests_")
 
+    def metrics(self, psr: str = "brier"):
+        if not self.is_fitted():
+            raise ValueError('GLEstimator must be fitted to call "metrics".')
+
+        GL_ind = self.GL_induced(psr)
+        GL_uncorrected = self.GL_uncorrected(psr)
+        GL_bias = self.GL_bias(psr)
+        GL = GL_uncorrected - GL_bias - GL_ind
+
+        return {
+            "psr": psr,
+            "GL": GL,
+            "GL_induced": GL_ind,
+            "GL_uncorrected": GL_uncorrected,
+            "GL_bias": GL_bias,
+        }
+
     def __format__(self, psr: str) -> str:
         """Print the computed average metrics with variance."""
         s = "GLEstimatorCV()"
@@ -858,13 +869,15 @@ class GLEstimatorCV:
             if not psr:
                 psr = "brier"
 
+            metrics = self.metrics(psr)
+
             extra = (
                 # f"  Splits            : {self.cv_}\n"
                 f"  Scoring rule      : {psr}\n"
-                f"  Grouping loss     : {format_trials(self.GL())}\n"
-                f"   ↳ Uncorrected GL : {format_trials(self.GL_uncorrected())}\n"
-                f"   ↳ Bias           : {format_trials(self.GL_bias())}\n"
-                f"   ↳ Binning induced: {format_trials(self.GL_induced())}\n"
+                f"  Grouping loss     : {format_trials(metrics['GL'])}\n"
+                f"   ↳ Uncorrected GL : {format_trials(metrics['GL_uncorrected'])}\n"
+                f"   ↳ Bias           : {format_trials(metrics['GL_bias'])}\n"
+                f"   ↳ Binning induced: {format_trials(metrics['GL_induced'])}\n"
             )
             s = f"{s}\n{extra}"
 

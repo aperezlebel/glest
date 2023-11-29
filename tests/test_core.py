@@ -37,13 +37,22 @@ def y_scores(data, classifier):
 
 @pytest.fixture(scope="module")
 def glest(classifier, data):
-    est = classifier
     X, y = data
 
-    glest = GLEstimator(est, random_state=0, train_size=0.5)
+    glest = GLEstimator(classifier, random_state=0, train_size=0.5)
     glest.fit(X, y)
 
     return glest
+
+
+@pytest.fixture(scope="module")
+def glest_cv(classifier, data):
+    X, y = data
+
+    glest_cv = GLEstimatorCV(classifier, random_state=0, verbose=10)
+    glest_cv.fit(X, y)
+
+    return glest_cv
 
 
 def test_glest_estimator(data):
@@ -231,17 +240,14 @@ def test_partitioner(estimator, n_bins, strategy):
                 assert 1 <= len(region_assigned) <= 2
 
 
-def test_glest_cv(classifier, data):
-    X, y = data
-    glest_cv = GLEstimatorCV(classifier, "decision_tree", random_state=0, verbose=10)
-    glest_cv.fit(X, y)
+def test_str_glest_cv(glest_cv):
     print(glest_cv)
-    print(f"{glest_cv:brier}")
+    print(f"{glest_cv:log}")
 
 
-def test_str(glest):
+def test_str_glest(glest):
     print(glest)
-    print(f"{glest:brier}")
+    print(f"{glest:log}")
 
 
 def test_manual_partition(data, classifier):
