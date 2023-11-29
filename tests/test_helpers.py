@@ -140,3 +140,34 @@ def test_compute_GL_uncorrected(partitioning):
 
     else:
         assert np.allclose(GL1, GL2)
+
+
+def _compute_GL_induced_brier(c_hat, y_bins):
+    """Estimate GL induced for the Brier score."""
+    uniques, counts = np.unique(y_bins, return_counts=True)
+    var = []
+
+    for i in uniques:
+        var.append(2 * np.var(c_hat[y_bins == i]))
+
+    GL_ind = np.vdot(var, counts) / np.sum(counts)
+
+    return GL_ind
+
+
+def test_compute_GL_induced_one():
+    """Example of a calibrated classifier with uniform scores."""
+    # Calibrated classifier with uniform scores
+    n_bins, n_samples_per_bin = 10, 1000
+    c_hat = np.linspace(0, 1, n_bins * n_samples_per_bin)
+    y_bins = np.repeat(np.arange(n_bins), n_samples_per_bin)
+
+    GL_induced = compute_GL_induced(c_hat, y_bins, psr="brier")
+    GL_induced2 = _compute_GL_induced_brier(c_hat, y_bins)
+
+    assert np.allclose(GL_induced, GL_induced2)
+
+    # From Perez-Lebel et al. 2023 Lemma C.3
+    GL_induced_theoretical = 2 * 1 / (12 * n_bins**2)
+    assert np.allclose(GL_induced, GL_induced_theoretical, atol=1e-6)
+    assert np.allclose(GL_induced2, GL_induced_theoretical, atol=1e-6)

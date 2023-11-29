@@ -172,16 +172,20 @@ class CEstimator:
         return self._c_hat(self.y_scores.reshape(-1, 1))
 
 
-def compute_GL_induced(c_hat, y_bins):
+def compute_GL_induced(c_hat, y_bins, psr: str = "brier"):
     """Estimate GL induced for the Brier score."""
 
     uniques, counts = np.unique(y_bins, return_counts=True)
-    var = []
+    diff = []
+
+    entropy = psr_name_to_entropy(psr)
 
     for i in uniques:
-        var.append(np.var(c_hat[y_bins == i]))
+        c_bin = c_hat[y_bins == i]
+        d = entropy(np.mean(c_bin)) - np.mean(entropy(c_bin))
+        diff.append(d)
 
-    GL_ind = np.vdot(var, counts) / np.sum(counts)
+    GL_ind = np.vdot(diff, counts) / np.sum(counts)
 
     return GL_ind
 
@@ -243,7 +247,10 @@ def grouping_loss_lower_bound(
 
 
 def psr_name_to_entropy(psr: str):
-    if psr == "brier":
+    if callable(psr):
+        return psr
+
+    elif psr == "brier":
         return lambda x: 2 * x * (1 - x)
 
     elif psr == "log":
@@ -258,11 +265,14 @@ def compute_GL_uncorrected(frac_pos, counts, psr: str = "brier"):
         frac_pos, counts, remove_empty=False, return_mean_bins=False
     )
     entropy = psr_name_to_entropy(psr)
-    diff = np.multiply(counts, entropy(prob_bins[:, None]) - entropy(frac_pos))
-    return np.nansum(diff) / np.sum(counts)
+    diff = entropy(prob_bins[:, None]) - entropy(frac_pos)
+    return np.nansum(counts * diff) / np.sum(counts)
 
 
-def compute_GL_bias(frac_pos, counts):
+def compute_GL_bias(frac_pos, counts, psr: str = "brier"):
+    if psr != "brier":
+        print('GL_bias computation is only available for "brier" psr.')
+        return np.nan
     return np.nan_to_num(grouping_loss_bias(frac_pos, counts, reduce_bin=True))
 
 
