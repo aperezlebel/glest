@@ -172,7 +172,7 @@ class CEstimator:
         return self._c_hat(self.y_scores.reshape(-1, 1))
 
 
-def estimate_GL_induced(c_hat, y_bins):
+def compute_GL_induced(c_hat, y_bins):
     """Estimate GL induced for the Brier score."""
 
     uniques, counts = np.unique(y_bins, return_counts=True)
@@ -240,6 +240,18 @@ def grouping_loss_lower_bound(
             return lower_bound, bias
 
     return lower_bound
+
+
+def compute_GL_uncorrected(frac_pos, counts):
+    prob_bins = calibration_curve(
+        frac_pos, counts, remove_empty=False, return_mean_bins=False
+    )
+    diff = np.multiply(counts, np.square(frac_pos - prob_bins[:, None]))
+    return np.nansum(diff) / np.sum(counts)
+
+
+def compute_GL_bias(frac_pos, counts):
+    return np.nan_to_num(grouping_loss_bias(frac_pos, counts, reduce_bin=True))
 
 
 def calibration_curve(

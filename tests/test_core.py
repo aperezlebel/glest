@@ -359,10 +359,10 @@ def test_glest_exceptions(classifier, data, y_scores):
 def test_glest_cv_exceptions(classifier):
     glest_cv = GLEstimatorCV(classifier)
     with pytest.raises(ValueError):
-        glest_cv.GL_
+        glest_cv.GL()
     with pytest.raises(ValueError):
-        glest_cv.GL_bias_
+        glest_cv.GL_bias()
     with pytest.raises(ValueError):
-        glest_cv.GL_ind_
+        glest_cv.GL_induced()
     with pytest.raises(ValueError):
-        glest_cv.GL_uncorrected_
+        glest_cv.GL_uncorrected()

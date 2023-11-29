@@ -9,15 +9,16 @@ from sklearn.model_selection._split import check_cv
 from .helpers import (
     CEstimator,
     scores_to_bin_ids,
-    estimate_GL_induced,
-    grouping_loss_lower_bound,
-    grouping_loss_bias,
+    compute_GL_induced,
+    compute_GL_bias,
     list_list_to_array,
     bins_from_strategy,
+    compute_GL_uncorrected,
 )
 from .plot import grouping_diagram
 from sklearn.utils.validation import indexable
 from sklearn.base import clone
+from typing import List
 
 
 class Partitioner:
@@ -584,26 +585,19 @@ class GLEstimator:
         if not self.is_fitted():
             raise ValueError("GLEstimator is not fitted.")
 
-        return grouping_loss_lower_bound(
-            self.frac_pos_,
-            self.counts_,
-            reduce_bin=True,
-            debiased=False,
-        )
+        return compute_GL_uncorrected(self.frac_pos_, self.counts_)
 
     def GL_bias(self, psr: str = "brier"):
         if not self.is_fitted():
             raise ValueError("GLEstimator is not fitted.")
 
-        return np.nan_to_num(
-            grouping_loss_bias(self.frac_pos_, self.counts_, reduce_bin=True)
-        )
+        return compute_GL_bias(self.frac_pos_, self.counts_)
 
     def GL_induced(self, psr: str = "brier"):
         if not self.is_fitted():
             raise ValueError("GLEstimator is not fitted.")
 
-        return estimate_GL_induced(self.c_hat_, self.y_bins_)
+        return compute_GL_induced(self.c_hat_, self.y_bins_)
 
     def metrics(self, psr: str = "brier"):
         available_metrics = ["brier"]
@@ -804,7 +798,7 @@ class GLEstimatorCV:
     def GL_induced(self, psr: str = "brier"):
         if not self.is_fitted():
             raise ValueError("GLEstimatorCV is not fitted.")
-        return [glest.GL_ind(psr) for glest in self.glests_]
+        return [glest.GL_induced(psr) for glest in self.glests_]
 
     def fit(self, X, y, groups=None):
         """Fit a GLEstimator instance on each of the train/test split yield
@@ -830,7 +824,7 @@ class GLEstimatorCV:
         X, y, groups = indexable(X, y, groups)
         cv = check_cv(self.cv, y=y, classifier=True)
         indices = cv.split(X, y, groups)
-        glests = []
+        glests: List[GLEstimator] = []
         for i, (train, test) in enumerate(indices):
             if self.verbose > 0:
                 print(f"Split {i+1}/{cv.get_n_splits()}")
