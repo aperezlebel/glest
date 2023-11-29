@@ -242,11 +242,23 @@ def grouping_loss_lower_bound(
     return lower_bound
 
 
-def compute_GL_uncorrected(frac_pos, counts):
+def psr_name_to_entropy(psr: str):
+    if psr == "brier":
+        return lambda x: 2 * x * (1 - x)
+
+    elif psr == "log":
+        return lambda x: -(x * np.log(x) + (1 - x) * np.log(1 - x))
+
+    else:
+        raise ValueError(f'Unknown proper scoring rule name "{psr}".')
+
+
+def compute_GL_uncorrected(frac_pos, counts, psr: str = "brier"):
     prob_bins = calibration_curve(
         frac_pos, counts, remove_empty=False, return_mean_bins=False
     )
-    diff = np.multiply(counts, np.square(frac_pos - prob_bins[:, None]))
+    entropy = psr_name_to_entropy(psr)
+    diff = np.multiply(counts, entropy(prob_bins[:, None]) - entropy(frac_pos))
     return np.nansum(diff) / np.sum(counts)
 
 
