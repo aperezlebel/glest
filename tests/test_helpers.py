@@ -132,14 +132,7 @@ def test_compute_GL_uncorrected(partitioning):
     GL1 = _compute_GL_uncorrected_brier(frac_pos, counts)
     GL2 = compute_GL_uncorrected(frac_pos, counts, psr="brier")
 
-    if np.isnan(GL1):
-        assert np.isnan(GL2)
-
-    elif np.isnan(GL2):
-        assert np.isnan(GL1)
-
-    else:
-        assert np.allclose(GL1, GL2)
+    assert np.allclose(GL1, GL2, equal_nan=True)
 
 
 def _compute_GL_induced_brier(c_hat, y_bins):
@@ -171,3 +164,20 @@ def test_compute_GL_induced_one():
     GL_induced_theoretical = 2 * 1 / (12 * n_bins**2)
     assert np.allclose(GL_induced, GL_induced_theoretical, atol=1e-6)
     assert np.allclose(GL_induced2, GL_induced_theoretical, atol=1e-6)
+
+
+@pytest.mark.parametrize(
+    "param",
+    [
+        ("brier", lambda x: 2 * x * (1 - x)),
+        ("log", lambda x: -x * np.log(x) - (1 - x) * np.log(1 - x)),
+    ],
+)
+@given(x=st.floats(min_value=0, max_value=1))
+def test_psr_name_to_entropy(param, x):
+    "Check the entropies associated with the names."
+    psr, entropy = param
+
+    entropy2 = psr_name_to_entropy(psr)
+
+    assert np.allclose(entropy(x), entropy2(x), equal_nan=True)
