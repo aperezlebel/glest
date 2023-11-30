@@ -31,7 +31,8 @@ jobs:
 
       - name: Run code coverage
         run: |
-          pip install coverage pytest
+          pip install coverage
+          pip install -r tests/requirements.txt
           coverage run --source=glest -m pytest
           coverage report
 
