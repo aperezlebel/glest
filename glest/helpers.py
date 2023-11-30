@@ -124,12 +124,14 @@ def _validate_clustering(*args):
 
     if frac_pos.shape != counts.shape:
         raise ValueError(
-            f"Shape mismatch between frac_pos {frac_pos.shape} and counts {counts.shape}"
+            f"Shape mismatch between frac_pos {frac_pos.shape} "
+            f"and counts {counts.shape}."
         )
 
     if len(args) == 3 and frac_pos.shape != mean_scores.shape:
         raise ValueError(
-            f"Shape mismatch between frac_pos {frac_pos.shape} and mean_scores {mean_scores.shape}"
+            f"Shape mismatch between frac_pos {frac_pos.shape} and "
+            f"mean_scores {mean_scores.shape}."
         )
 
     if frac_pos.ndim < 2:
@@ -172,24 +174,73 @@ class CEstimator:
         return self._c_hat(self.y_scores.reshape(-1, 1))
 
 
-def estimate_GL_induced(c_hat, y_scores, bins):
+def compute_GL_induced(c_hat, y_bins, psr: str = "brier"):
     """Estimate GL induced for the Brier score."""
-    n_bins = len(bins) - 1
-    y_bins = np.digitize(y_scores, bins=bins) - 1
-    y_bins = np.clip(y_bins, a_min=None, a_max=n_bins - 1)
 
     uniques, counts = np.unique(y_bins, return_counts=True)
-    var = []
+    diff = []
+
+    entropy = psr_name_to_entropy(psr)
 
     for i in uniques:
-        var.append(np.var(c_hat[y_bins == i]))
+        c_bin = c_hat[y_bins == i]
+        d = entropy(np.mean(c_bin)) - np.mean(entropy(c_bin))
+        diff.append(d)
 
-    GL_ind = np.vdot(var, counts) / np.sum(counts)
+    GL_ind = np.vdot(diff, counts) / np.sum(counts)
 
     return GL_ind
 
 
-def grouping_loss_bias(frac_pos, counts, reduce_bin=True):
+def psr_name_to_entropy(psr: str):
+    """Get the entropy of a scoring rule.
+
+    Parameters
+    ----------
+    psr : str | Callable
+        The name of the scoring rule in {"brier", "log"}. Or its entropy
+        given as a callable `lambda p: entropy(p)`.
+
+    Returns
+    -------
+    Callable
+        The entropy of the scoring rule.
+
+    Raises
+    ------
+    ValueError
+        If psr is neither a valid string nor a callable.
+
+    """
+    available_metrics = ["brier", "log"]
+
+    if callable(psr):
+        return psr
+
+    elif psr == "brier":
+        return lambda x: 2 * x * (1 - x)
+
+    elif psr == "log":
+        return lambda x: -(x * np.log(x) + (1 - x) * np.log(1 - x))
+
+    else:
+        raise ValueError(f'Unknown metric "{psr}". Choices: {available_metrics}.')
+
+
+def compute_GL_uncorrected(frac_pos, counts, psr: str = "brier"):
+    prob_bins = calibration_curve(
+        frac_pos, counts, remove_empty=False, return_mean_bins=False
+    )
+    entropy = psr_name_to_entropy(psr)
+    diff = entropy(prob_bins[:, None]) - entropy(frac_pos)
+    return np.nansum(counts * diff) / np.sum(counts)
+
+
+def compute_GL_bias(frac_pos, counts, psr: str = "brier"):
+    if psr != "brier":
+        print('Warning: GL bias computation is only available for "brier" psr.')
+        return np.nan
+
     prob_bins = calibration_curve(
         frac_pos, counts, remove_empty=False, return_mean_bins=False
     )
@@ -209,40 +260,9 @@ def grouping_loss_bias(frac_pos, counts, reduce_bin=True):
     )
     bias = np.nansum(var, axis=1) - np.divide(prob_bins * (1 - prob_bins), n_bins - 1)
     bias *= n_bins / n
-    if reduce_bin:
-        return np.nansum(bias)
-
+    bias *= 2  # for the Brier score
+    bias = np.nansum(bias)
     return bias
-
-
-def grouping_loss_lower_bound(
-    frac_pos,
-    counts,
-    reduce_bin=True,
-    debiased=False,
-    return_bias=False,
-):
-    """Compute a lower bound of the grouping loss from clustering."""
-    prob_bins = calibration_curve(
-        frac_pos, counts, remove_empty=False, return_mean_bins=False
-    )
-    diff = np.multiply(counts, np.square(frac_pos - prob_bins[:, None]))
-
-    if reduce_bin:
-        lower_bound = np.nansum(diff) / np.sum(counts)
-
-    else:
-        lower_bound = np.divide(np.nansum(diff, axis=1), np.sum(counts))
-
-    if debiased:
-        bias = np.nan_to_num(
-            grouping_loss_bias(frac_pos, counts, reduce_bin=reduce_bin)
-        )
-        lower_bound -= bias
-        if return_bias:
-            return lower_bound, bias
-
-    return lower_bound
 
 
 def calibration_curve(
