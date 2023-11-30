@@ -190,62 +190,6 @@ def compute_GL_induced(c_hat, y_bins, psr: str = "brier"):
     return GL_ind
 
 
-def grouping_loss_bias(frac_pos, counts, reduce_bin=True):
-    prob_bins = calibration_curve(
-        frac_pos, counts, remove_empty=False, return_mean_bins=False
-    )
-    n_bins = np.sum(counts, axis=1)  # number of samples in bin
-    n = np.sum(n_bins)
-    var = np.divide(
-        frac_pos * (1 - frac_pos),
-        counts - 1,
-        np.full_like(frac_pos, np.nan, dtype=float),
-        where=counts > 1,
-    )
-    var = var * np.divide(
-        counts,
-        n_bins[:, None],
-        np.full_like(frac_pos, np.nan, dtype=float),
-        where=n_bins[:, None] > 0,
-    )
-    bias = np.nansum(var, axis=1) - np.divide(prob_bins * (1 - prob_bins), n_bins - 1)
-    bias *= n_bins / n
-    if reduce_bin:
-        return np.nansum(bias)
-
-    return bias
-
-
-def grouping_loss_lower_bound(
-    frac_pos,
-    counts,
-    reduce_bin=True,
-    debiased=False,
-    return_bias=False,
-):
-    """Compute a lower bound of the grouping loss from clustering."""
-    prob_bins = calibration_curve(
-        frac_pos, counts, remove_empty=False, return_mean_bins=False
-    )
-    diff = np.multiply(counts, np.square(frac_pos - prob_bins[:, None]))
-
-    if reduce_bin:
-        lower_bound = np.nansum(diff) / np.sum(counts)
-
-    else:
-        lower_bound = np.divide(np.nansum(diff, axis=1), np.sum(counts))
-
-    if debiased:
-        bias = np.nan_to_num(
-            grouping_loss_bias(frac_pos, counts, reduce_bin=reduce_bin)
-        )
-        lower_bound -= bias
-        if return_bias:
-            return lower_bound, bias
-
-    return lower_bound
-
-
 def psr_name_to_entropy(psr: str):
     """Get the entropy of a scoring rule.
 
@@ -299,7 +243,29 @@ def compute_GL_bias(frac_pos, counts, psr: str = "brier"):
     if psr != "brier":
         print('Warning: GL bias computation is only available for "brier" psr.')
         return np.nan
-    return np.nan_to_num(grouping_loss_bias(frac_pos, counts, reduce_bin=True))
+
+    prob_bins = calibration_curve(
+        frac_pos, counts, remove_empty=False, return_mean_bins=False
+    )
+    n_bins = np.sum(counts, axis=1)  # number of samples in bin
+    n = np.sum(n_bins)
+    var = np.divide(
+        frac_pos * (1 - frac_pos),
+        counts - 1,
+        np.full_like(frac_pos, np.nan, dtype=float),
+        where=counts > 1,
+    )
+    var = var * np.divide(
+        counts,
+        n_bins[:, None],
+        np.full_like(frac_pos, np.nan, dtype=float),
+        where=n_bins[:, None] > 0,
+    )
+    bias = np.nansum(var, axis=1) - np.divide(prob_bins * (1 - prob_bins), n_bins - 1)
+    bias *= n_bins / n
+    bias *= 2  # for the Brier score
+    bias = np.nansum(bias)
+    return bias
 
 
 def calibration_curve(

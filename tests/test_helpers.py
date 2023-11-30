@@ -9,11 +9,8 @@ from glest.helpers import (
     bins_from_strategy,
     calibration_curve,
     check_2D_array,
-    grouping_loss_bias,
-    grouping_loss_lower_bound,
     compute_GL_induced,
     compute_GL_uncorrected,
-    # compute_GL_uncorrected2,
     compute_GL_bias,
     psr_name_to_entropy,
 )
@@ -58,18 +55,6 @@ def test_check_2d_array():
     x = np.zeros((2, 2, 2))
     with pytest.raises(ValueError):
         check_2D_array(x)
-
-
-def test_grouping_loss_bias():
-    frac_pos = np.ones((2, 2))
-    counts = np.ones((2, 2))
-    grouping_loss_bias(frac_pos, counts, reduce_bin=False)
-
-
-def test_grouping_loss_lower_bound():
-    frac_pos = np.ones((2, 2))
-    counts = np.ones((2, 2))
-    grouping_loss_lower_bound(frac_pos, counts, reduce_bin=False, debiased=False)
 
 
 def test_calibration_curve():

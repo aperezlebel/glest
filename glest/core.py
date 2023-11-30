@@ -733,6 +733,9 @@ class GLEstimator:
     def __str__(self) -> str:
         return f"{self}"
 
+    def __repr__(self) -> str:
+        return f"{self}"
+
 
 class GLEstimatorCV:
     """Estimate the grouping loss of a probabilistic classifier.
@@ -884,4 +887,7 @@ class GLEstimatorCV:
         return s
 
     def __str__(self) -> str:
+        return f"{self}"
+
+    def __repr__(self) -> str:
         return f"{self}"
