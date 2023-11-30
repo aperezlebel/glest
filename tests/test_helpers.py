@@ -11,7 +11,6 @@ from glest.helpers import (
     check_2D_array,
     compute_GL_induced,
     compute_GL_uncorrected,
-    compute_GL_bias,
     psr_name_to_entropy,
 )
 
@@ -166,3 +165,9 @@ def test_psr_name_to_entropy(param, x):
     entropy2 = psr_name_to_entropy(psr)
 
     assert np.allclose(entropy(x), entropy2(x), equal_nan=True)
+    assert np.allclose(entropy(x), psr_name_to_entropy(entropy)(x), equal_nan=True)
+
+
+def test_psr_name_to_entropy_exceptions():
+    with pytest.raises(ValueError):
+        psr_name_to_entropy("unexisting")

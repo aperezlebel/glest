@@ -36,7 +36,7 @@ def y_scores(data, classifier):
 
 
 @pytest.fixture(scope="module")
-def glest(classifier, data):
+def glest(classifier, data) -> GLEstimator:
     X, y = data
 
     glest = GLEstimator(classifier, random_state=0, train_size=0.5)
@@ -46,7 +46,7 @@ def glest(classifier, data):
 
 
 @pytest.fixture(scope="module")
-def glest_cv(classifier, data):
+def glest_cv(classifier, data) -> GLEstimatorCV:
     X, y = data
 
     glest_cv = GLEstimatorCV(classifier, random_state=0, verbose=10)
@@ -109,6 +109,13 @@ def test_glest(data, classifier, partitioner):
 
     glest = GLEstimator(classifier, partitioner)
     glest.fit(X, y)
+
+
+def test_glest_cv(glest_cv: GLEstimatorCV):
+    glest_cv.GL()
+    glest_cv.GL_bias()
+    glest_cv.GL_uncorrected()
+    glest_cv.GL_induced()
 
 
 def test_glest_user_partition(data, classifier):
@@ -243,11 +250,13 @@ def test_partitioner(estimator, n_bins, strategy):
 def test_str_glest_cv(glest_cv):
     print(glest_cv)
     print(f"{glest_cv:log}")
+    repr(glest_cv)
 
 
 def test_str_glest(glest):
     print(glest)
     print(f"{glest:log}")
+    repr(glest)
 
 
 def test_manual_partition(data, classifier):
@@ -331,6 +340,21 @@ def test_partitioner_exceptions(y_scores, data):
 def test_glest_exceptions(classifier, data, y_scores):
     X, y = data
 
+    with pytest.raises(ValueError):
+        GLEstimator(y_scores).GL()
+
+    with pytest.raises(ValueError):
+        GLEstimator(y_scores).GL_induced()
+
+    with pytest.raises(ValueError):
+        GLEstimator(y_scores).GL_bias()
+
+    with pytest.raises(ValueError):
+        GLEstimator(y_scores).GL_uncorrected()
+
+    with pytest.raises(ValueError):
+        GLEstimator(y_scores).metrics()
+
     GLEstimator(y_scores.reshape(-1, 2)).fit(X, y)
     with pytest.raises(ValueError):
         GLEstimator(y_scores.reshape(-1, 2, 1)).fit(X, y)
@@ -372,3 +396,5 @@ def test_glest_cv_exceptions(classifier):
         glest_cv.GL_induced()
     with pytest.raises(ValueError):
         glest_cv.GL_uncorrected()
+    with pytest.raises(ValueError):
+        glest_cv.metrics()

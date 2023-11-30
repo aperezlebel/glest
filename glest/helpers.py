@@ -124,12 +124,14 @@ def _validate_clustering(*args):
 
     if frac_pos.shape != counts.shape:
         raise ValueError(
-            f"Shape mismatch between frac_pos {frac_pos.shape} and counts {counts.shape}"
+            f"Shape mismatch between frac_pos {frac_pos.shape} "
+            f"and counts {counts.shape}."
         )
 
     if len(args) == 3 and frac_pos.shape != mean_scores.shape:
         raise ValueError(
-            f"Shape mismatch between frac_pos {frac_pos.shape} and mean_scores {mean_scores.shape}"
+            f"Shape mismatch between frac_pos {frac_pos.shape} and "
+            f"mean_scores {mean_scores.shape}."
         )
 
     if frac_pos.ndim < 2:
@@ -207,8 +209,6 @@ def psr_name_to_entropy(psr: str):
     Raises
     ------
     ValueError
-        If psr is a string but not in the available methods.
-    ValueError
         If psr is neither a valid string nor a callable.
 
     """
@@ -217,9 +217,6 @@ def psr_name_to_entropy(psr: str):
     if callable(psr):
         return psr
 
-    elif psr not in available_metrics:
-        raise ValueError(f'Unknown metric "{psr}". Choices: {available_metrics}.')
-
     elif psr == "brier":
         return lambda x: 2 * x * (1 - x)
 
@@ -227,7 +224,7 @@ def psr_name_to_entropy(psr: str):
         return lambda x: -(x * np.log(x) + (1 - x) * np.log(1 - x))
 
     else:
-        raise ValueError(f'Unknown proper scoring rule name "{psr}".')
+        raise ValueError(f'Unknown metric "{psr}". Choices: {available_metrics}.')
 
 
 def compute_GL_uncorrected(frac_pos, counts, psr: str = "brier"):
