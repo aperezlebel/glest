@@ -44,6 +44,9 @@ class Partitioner:
     strategy : {"uniform", "quantile"}, default="uniform"
         The binning strategy used to create the bins. With uniform, same-width
         bins are created. With quantile, same-mass bins are created.
+    binwise_fit : bool, default=True
+        When True, fits one partitioner per bin. Otherwise, fits one
+        partitioner on the whole feature space at once.
     raise_on_fit_error : bool, default=False
         Whether to raise an error when the estimator fails to fit on a bin.
         If False, no partition is created on the failing bin and all samples
@@ -65,12 +68,14 @@ class Partitioner:
         predict_method: str = None,
         n_bins: int = 15,
         strategy: str = "uniform",
+        binwise_fit: bool = True,
         raise_on_fit_error: bool = False,
         verbose: int = 0,
     ) -> None:
         self.estimator = estimator
         self.n_bins = n_bins
         self.strategy = strategy
+        self.binwise_fit = binwise_fit
         self.predict_method = predict_method
         self.raise_on_fit_error = raise_on_fit_error
         self.verbose = verbose
@@ -81,6 +86,7 @@ class Partitioner:
         name: str,
         n_bins: int = 15,
         strategy: str = "uniform",
+        binwise_fit: bool = True,
         raise_on_fit_error: bool = False,
         verbose: int = 0,
         random_state: int = None,
@@ -96,6 +102,9 @@ class Partitioner:
         strategy : {"uniform", "quantile"}, default="uniform"
             The binning strategy used to create the bins. With uniform, same-width
             bins are created. With quantile, same-mass bins are created.
+        binwise_fit : bool, default=True
+            When True, fits one partitioner per bin. Otherwise, fits one
+            partitioner on the whole feature space at once.
         raise_on_fit_error : bool, default=False
             Whether to raise an error when the estimator fails to fit on a bin.
             If False, no partition is created on the failing bin and all samples
@@ -145,6 +154,7 @@ class Partitioner:
             estimator=estimator,
             n_bins=n_bins,
             strategy=strategy,
+            binwise_fit=binwise_fit,
             raise_on_fit_error=raise_on_fit_error,
             verbose=verbose,
             predict_method=predict_method,
@@ -223,12 +233,18 @@ class Partitioner:
             )
 
         self.fit_bins(y_scores)  # bins are stored in self.bins_
-        y_bins = self.transform_bins(y_scores)
+
+        if self.binwise_fit:
+            y_bins = self.transform_bins(y_scores)
+            n_bins = len(self.bins_) - 1
+        else:
+            y_bins = np.zeros_like(y_scores)
+            n_bins = 1
 
         fitted_partitioners_ = []
-        for i in range(len(self.bins_) - 1):
+        for i in range(n_bins):
             if self.verbose > 0:
-                print(f"Bin {i+1}/{len(self.bins_)-1}: partitioning.")
+                print(f"Bin {i+1}/{n_bins}: partitioning.")
             bin_idx = y_bins == i
             X_bin = X[bin_idx, :]
             n_samples_bin = X_bin.shape[0]
@@ -293,7 +309,7 @@ class Partitioner:
             bin_idx = y_bins == i  # restrict to samples belonging to bin i
             X_bin = X[bin_idx, :]
             n_samples_bin = X_bin.shape[0]
-            partitioner = self.fitted_partitioners_[i]
+            partitioner = self.fitted_partitioners_[i if self.binwise_fit else 0]
 
             # Store partition id
             if partitioner is not None and n_samples_bin > 0:
@@ -339,6 +355,7 @@ class GLEstimator:
 
     default_n_bins: int = 15
     default_strategy: str = "uniform"
+    default_binwise_fit: bool = True
 
     def __init__(
         self,
@@ -453,6 +470,7 @@ class GLEstimator:
                 name=self.partitioner,
                 n_bins=GLEstimator.default_n_bins,
                 strategy=GLEstimator.default_strategy,
+                binwise_fit=GLEstimator.default_binwise_fit,
                 random_state=self.random_state,
                 verbose=self.verbose - 1,
             )
