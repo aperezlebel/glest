@@ -355,6 +355,7 @@ class GLEstimator:
 
     default_n_bins: int = 15
     default_strategy: str = "uniform"
+    default_binwise_fit: bool = True
 
     def __init__(
         self,
@@ -469,7 +470,7 @@ class GLEstimator:
                 name=self.partitioner,
                 n_bins=GLEstimator.default_n_bins,
                 strategy=GLEstimator.default_strategy,
-                binwise_fit=GLEstimator.binwise_fit,
+                binwise_fit=GLEstimator.default_binwise_fit,
                 random_state=self.random_state,
                 verbose=self.verbose - 1,
             )
