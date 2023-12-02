@@ -100,12 +100,14 @@ def test_glest_partitioner(data, classifier, partitioner):
         "decision_tree",
     ],
 )
-def test_glest(data, classifier, partitioner):
+@pytest.mark.parametrize("binwise_fit", [False, True])
+def test_glest(data, classifier, partitioner, binwise_fit):
     X, y = data
 
     if not isinstance(partitioner, str):
         partitioner.n_bins = 15
         partitioner.random_state = 0
+        partitioner.binwise_fit = binwise_fit
 
     glest = GLEstimator(classifier, partitioner)
     glest.fit(X, y)
@@ -205,7 +207,8 @@ def test_scores_to_bin_ids(n_bins, strategy):
         "quantile",
     ],
 )
-def test_partitioner(estimator, n_bins, strategy):
+@pytest.mark.parametrize("binwise_fit", [False, True])
+def test_partitioner(estimator, n_bins, strategy, binwise_fit):
     rng = np.random.default_rng(0)
     n = 10
 
@@ -217,7 +220,11 @@ def test_partitioner(estimator, n_bins, strategy):
 
     if isinstance(estimator, str):
         partitioner = Partitioner.from_name(
-            estimator, n_bins=n_bins, strategy=strategy, verbose=10
+            estimator,
+            n_bins=n_bins,
+            strategy=strategy,
+            verbose=10,
+            binwise_fit=binwise_fit,
         )
     else:
         partitioner = Partitioner(
@@ -226,6 +233,7 @@ def test_partitioner(estimator, n_bins, strategy):
             strategy=strategy,
             predict_method=attribute,
             verbose=10,
+            binwise_fit=binwise_fit,
         )
     partitioner.fit(X, y_scores, y_true=y_true)
     labels = partitioner.predict(X, y_scores)
