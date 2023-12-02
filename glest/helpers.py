@@ -174,24 +174,6 @@ class CEstimator:
         return self._c_hat(self.y_scores.reshape(-1, 1))
 
 
-def compute_GL_induced(c_hat, y_bins, psr: str = "brier"):
-    """Estimate GL induced for the Brier score."""
-
-    uniques, counts = np.unique(y_bins, return_counts=True)
-    diff = []
-
-    entropy = psr_name_to_entropy(psr)
-
-    for i in uniques:
-        c_bin = c_hat[y_bins == i]
-        d = entropy(np.mean(c_bin)) - np.mean(entropy(c_bin))
-        diff.append(d)
-
-    GL_ind = np.vdot(diff, counts) / np.sum(counts)
-
-    return GL_ind
-
-
 def psr_name_to_entropy(psr: str):
     """Get the entropy of a scoring rule.
 
@@ -227,19 +209,54 @@ def psr_name_to_entropy(psr: str):
         raise ValueError(f'Unknown metric "{psr}". Choices: {available_metrics}.')
 
 
+def compute_GL_induced(c_hat, y_bins, psr: str = "brier"):
+    """Estimate GL induced for the Brier score."""
+
+    uniques, counts = np.unique(y_bins, return_counts=True)
+    diff = []
+
+    entropy = psr_name_to_entropy(psr)
+
+    for i in uniques:
+        c_bin = c_hat[y_bins == i]
+        d = entropy(np.mean(c_bin)) - np.mean(entropy(c_bin))
+        diff.append(d)
+
+    GL_ind = np.vdot(diff, counts) / np.sum(counts)
+
+    return GL_ind
+
+
+def filter_valid_counts(counts):
+    """Discard regions with only one sample since the debiasing is not valid
+    for this situation."""
+    counts = counts.copy()
+    counts[counts == 1] = 0
+    return counts
+
+
 def compute_GL_uncorrected(frac_pos, counts, psr: str = "brier"):
+    counts = filter_valid_counts(counts)
+
     prob_bins = calibration_curve(
         frac_pos, counts, remove_empty=False, return_mean_bins=False
     )
     entropy = psr_name_to_entropy(psr)
     diff = entropy(prob_bins[:, None]) - entropy(frac_pos)
-    return np.nansum(counts * diff) / np.sum(counts)
+
+    n_samples = np.sum(counts)
+    if n_samples > 0:
+        return np.nansum(counts * diff) / n_samples
+    else:
+        return 0
 
 
 def compute_GL_bias(frac_pos, counts, psr: str = "brier"):
     if psr != "brier":
         print('Warning: GL bias computation is only available for "brier" psr.')
         return np.nan
+
+    counts = filter_valid_counts(counts)
 
     prob_bins = calibration_curve(
         frac_pos, counts, remove_empty=False, return_mean_bins=False
@@ -249,19 +266,30 @@ def compute_GL_bias(frac_pos, counts, psr: str = "brier"):
     var = np.divide(
         frac_pos * (1 - frac_pos),
         counts - 1,
-        np.full_like(frac_pos, np.nan, dtype=float),
+        np.full_like(frac_pos, 0, dtype=float),
         where=counts > 1,
     )
     var = var * np.divide(
         counts,
         n_bins[:, None],
-        np.full_like(frac_pos, np.nan, dtype=float),
+        np.full_like(frac_pos, 0, dtype=float),
         where=n_bins[:, None] > 0,
     )
-    bias = np.nansum(var, axis=1) - np.divide(prob_bins * (1 - prob_bins), n_bins - 1)
-    bias *= n_bins / n
+    var2 = np.divide(
+        prob_bins * (1 - prob_bins),
+        n_bins - 1,
+        np.full_like(prob_bins, 0, dtype=float),
+        where=n_bins > 1,
+    )
+    bias = np.sum(var, axis=1) - var2
+    bias *= np.divide(
+        n_bins,
+        n,
+        np.full_like(n_bins, 0, dtype=float),
+        where=n > 0,
+    )
     bias *= 2  # for the Brier score
-    bias = np.nansum(bias)
+    bias = np.sum(bias)
     return bias
 
 

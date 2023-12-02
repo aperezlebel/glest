@@ -14,6 +14,7 @@ from .helpers import (
     list_list_to_array,
     bins_from_strategy,
     compute_GL_uncorrected,
+    filter_valid_counts,
 )
 from .plot import grouping_diagram
 from sklearn.utils.validation import indexable
@@ -679,9 +680,11 @@ class GLEstimator:
         """
         check_is_fitted(self)
 
+        counts = filter_valid_counts(self.counts_)
+
         fig = grouping_diagram(
             frac_pos=self.frac_pos_,
-            counts=self.counts_,
+            counts=counts,
             mean_scores=self.mean_scores_,
             bins=self.partitioner_.bins_,
             ax=ax,

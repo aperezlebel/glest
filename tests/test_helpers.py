@@ -12,7 +12,21 @@ from glest.helpers import (
     compute_GL_induced,
     compute_GL_uncorrected,
     psr_name_to_entropy,
+    compute_GL_bias,
+    filter_valid_counts,
 )
+
+
+@pytest.fixture(scope="module")
+def c_hat():
+    n_bins, n_samples_per_bin = 10, 1000
+    return np.linspace(0, 1, n_bins * n_samples_per_bin)
+
+
+@pytest.fixture(scope="module")
+def y_bins():
+    n_bins, n_samples_per_bin = 10, 1000
+    return np.repeat(np.arange(n_bins), n_samples_per_bin)
 
 
 def test_bins_from_strategy():
@@ -66,11 +80,17 @@ def test_calibration_curve():
 
 
 def _compute_GL_uncorrected_brier(frac_pos, counts):
+    counts = filter_valid_counts(counts)
+
     prob_bins = calibration_curve(
         frac_pos, counts, remove_empty=False, return_mean_bins=False
     )
     diff = np.multiply(counts, 2 * np.square(frac_pos - prob_bins[:, None]))
-    return np.nansum(diff) / np.sum(counts)
+    n_samples = np.sum(counts)
+    if n_samples > 0:
+        return np.nansum(diff) / n_samples
+    else:
+        return 0
 
 
 def test_compute_GL_uncorrected_one():
@@ -83,8 +103,8 @@ def test_compute_GL_uncorrected_one():
 
     counts = np.array(
         [
-            [1, 1],
-            [1, 1],
+            [2, 2],
+            [2, 2],
         ]
     )
 
@@ -101,7 +121,9 @@ def partitioning_factory():
     )
 
     # Define strategies for integer and float arrays
-    counts_strategy = shape_strategy.flatmap(lambda s: arrays(np.int32, s))
+    counts_strategy = shape_strategy.flatmap(
+        lambda s: arrays(np.int32, s, elements=st.integers(0, 10))
+    )
     frac_pos_strategy = shape_strategy.flatmap(
         lambda s: arrays(np.float64, s, elements=st.floats(0, 1))
     )
@@ -116,7 +138,46 @@ def test_compute_GL_uncorrected(partitioning):
     GL1 = _compute_GL_uncorrected_brier(frac_pos, counts)
     GL2 = compute_GL_uncorrected(frac_pos, counts, psr="brier")
 
-    assert np.allclose(GL1, GL2, equal_nan=True)
+    assert np.isfinite(GL2)
+    assert np.allclose(GL1, GL2)
+
+    # GL_uncorrected should be positive
+    assert GL2 >= -1e-15  # allow for numerical errors
+
+
+@given(partitioning_factory())
+def test_compute_GL_bias(partitioning):
+    frac_pos, counts = partitioning
+    GL_bias = compute_GL_bias(frac_pos, counts)
+    assert np.isfinite(GL_bias)
+
+
+def c_hat_factory():
+    shape_strategy = st.shared(
+        array_shapes(min_dims=1, max_dims=1, min_side=1, max_side=100)
+    )
+
+    # Define strategies for integer and float arrays
+    y_bins_strategy = shape_strategy.flatmap(
+        lambda s: arrays(np.int32, s, elements=st.integers(0, 10))
+    )
+    c_hat_strategy = shape_strategy.flatmap(
+        lambda s: arrays(np.float64, s, elements=st.floats(0, 1))
+    )
+
+    # Use the st.tuples strategy to create a tuple of two arrays with the same shape
+    return st.tuples(c_hat_strategy, y_bins_strategy)
+
+
+@given(params=c_hat_factory())
+def test_compute_GL_induced(params):
+    c_hat, y_bins = params
+    GL_induced = compute_GL_induced(c_hat, y_bins)
+    print(GL_induced)
+    assert np.isfinite(GL_induced)
+
+    # GL_induced should be positive
+    assert GL_induced >= -1e-15  # allow for numerical errors
 
 
 def _compute_GL_induced_brier(c_hat, y_bins):
@@ -171,3 +232,48 @@ def test_psr_name_to_entropy(param, x):
 def test_psr_name_to_entropy_exceptions():
     with pytest.raises(ValueError):
         psr_name_to_entropy("unexisting")
+
+
+def size_one_factory():
+    shape_strategy = st.shared(
+        array_shapes(min_dims=2, max_dims=2, min_side=1, max_side=10)
+    )
+
+    # Define strategies for integer and float arrays
+    # counts_strategy = shape_strategy.flatmap(lambda s: arrays(np.int32, s, elements=1))
+    counts_strategy = shape_strategy.flatmap(
+        lambda shape: st.just(np.ones(shape, dtype=np.int32))
+    )
+    frac_pos_strategy = shape_strategy.flatmap(
+        lambda s: arrays(np.float64, s, elements=st.floats(0, 1))
+    )
+
+    # Use the st.tuples strategy to create a tuple of two arrays with the same shape
+    return st.tuples(frac_pos_strategy, counts_strategy)
+
+
+@given(size_one_factory())
+def test_size_one_regions(partitioning):
+    """Regions with only one sample must be discarded because there cannot be
+    a valid debiasing correction for these regions. The debiasing starts
+    with two samples per region (factor 1/(n-1)).
+
+    This test checks that size one regions are discarded for the metrics
+    computation.
+    """
+    frac_pos, counts = partitioning
+
+    # print(counts)
+
+    GL_bias = compute_GL_bias(frac_pos, counts)
+
+    print(GL_bias)
+
+    GL_uncorrected = compute_GL_uncorrected(frac_pos, counts)
+    GL_induced = compute_GL_induced(frac_pos, counts)
+
+    # print(GL_uncorrected)
+    print(GL_induced)
+
+    assert GL_uncorrected == 0
+    assert GL_bias == 0
