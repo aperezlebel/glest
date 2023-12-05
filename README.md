@@ -7,10 +7,15 @@
 
 ## Install
 
+From PyPi:
+```
+pip install glest
+```
+
+From source:
 ```
 pip install git+https://github.com/aperezlebel/glest.git
 ```
-
 
 ## Cite
 
