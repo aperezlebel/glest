@@ -625,4 +625,5 @@ _flare_lut = [
 ]
 
 _cmap = colors.ListedColormap(_flare_lut, "flare")
-mpl.colormaps.register(_cmap, name="flare")
+if "flare" not in mpl.colormaps:
+    mpl.colormaps.register(_cmap, name="flare")
