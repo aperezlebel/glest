@@ -1,4 +1,5 @@
 .vscode
+docs/_build/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -130,20 +131,3 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-src/pytorch_cifar/
-
-logbook
-
-interactive.py
-
-vision_transformer/
-
-article
-
-_article
-
-*.csv
-
-debias.py
-
-iclr23
