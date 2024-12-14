@@ -1,8 +1,5 @@
-glest package
-=============
-
-Submodules
-----------
+API
+===
 
 glest.core module
 -----------------
@@ -24,14 +21,6 @@ glest.plot module
 -----------------
 
 .. automodule:: glest.plot
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Module contents
----------------
-
-.. automodule:: glest
    :members:
    :undoc-members:
    :show-inheritance:
