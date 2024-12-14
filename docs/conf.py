@@ -34,3 +34,7 @@ html_static_path = ["_static"]
 
 napoleon_google_docstring = True
 napoleon_numpy_docstring = True
+
+html_theme_options = {
+    "navigation_depth": 4,
+}
