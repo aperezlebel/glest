@@ -9,4 +9,4 @@ glest documentation
 .. toctree::
    :maxdepth: 4
 
-   api/glest
+   source/api
