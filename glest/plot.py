@@ -5,65 +5,66 @@ from matplotlib.colorbar import Colorbar
 from matplotlib.colors import Normalize
 from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 
-from glest.helpers import calibration_curve as calibration_curve
-
 
 def grouping_diagram(
-    frac_pos,
-    counts,
-    mean_scores,
-    bins,
+    c_hat,
+    r_hat,
+    n_in_leaf,
+    f,
+    leaf_ids,
+    groups="all",
     ax: plt.Axes = None,
-    plot_calibration: bool = True,
-    plot_bins: bool = True,
+    plot_calibration=True,
     plot_cbar: bool = True,
     plot_hist: bool = True,
     plot_legend: bool = True,
-    fig_kw: dict = None,
-    scatter_kw: dict = None,
-    calibration_kw: dict = None,
-    hist_kw: dict = None,
-    bin_kw: dict = None,
-    legend_kw: dict = None,
 ):
-    frac_pos = np.array(frac_pos)
-    counts = np.array(counts)
-    mean_scores = np.array(mean_scores)
-    bins = np.array(bins)
-
-    assert frac_pos.shape == counts.shape == mean_scores.shape
-    assert bins.shape[0] == frac_pos.shape[0] + 1
-
+    """
+    Plot a grouping diagram for residuals.
+    Parameters
+    ----------
+    c_hat : array-like
+        Predicted probabilities.
+    r_hat : array-like
+        Predicted residuals.
+    n_in_leaf : array-like
+        Number of samples in each leaf.
+    f : callable
+        Function to compute the grouping diagram.
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        The figure containing the grouping diagram.
+    """
     # Scatter color
     norm = Normalize(vmin=1, vmax=None)
-    sm = ScalarMappable(norm=norm, cmap='flare')
-    color = sm.to_rgba(counts.flat)
+    sm = ScalarMappable(norm=norm, cmap="viridis")
+    color = sm.to_rgba(leaf_ids.flat)
 
     # Scatter sizes
     norm = Normalize(vmin=1, vmax=100, clip=True)
-    sizes = 15+ 20*norm(counts.flat)
 
     # Default parameters
     _fig_kw = dict(
-        figsize=(3, 3),
+        figsize=(4, 4),
     )
     _scatter_kw = dict(
-        edgecolor='white',
+        edgecolor="white",
         linewidth=0.3,
         color=color,
-        s=sizes,
-        label='Subgroups',
+        label="Subgroups",
+        alpha=0.5,
     )
     _calibration_kw = dict(
-        marker='.',
-        color='black',
-        markersize=5,
-        label='Calibration curve',
+        color="black",
+        linewidth=5,
+        label="Calibration curve",
+        zorder=3,
     )
     _hist_kw = dict(
-        edgecolor='black',
+        edgecolor="black",
         linewidth=0.2,
-        color='#dfa0b3',
+        color="#dfa0b3",
     )
     _bin_kw = dict(
         lw=0.2,
@@ -73,85 +74,111 @@ def grouping_diagram(
     )
     _legend_kw = dict(
         framealpha=0,
-        loc='lower center',
+        loc="lower center",
         bbox_to_anchor=(0.5, 1.1) if plot_hist else (0.5, 1),
         ncols=2,
     )
 
-    # Update default parameters with input
-    if calibration_kw is not None:
-        _calibration_kw.update(calibration_kw)
-    if hist_kw is not None:
-        _hist_kw.update(hist_kw)
-    if scatter_kw is not None:
-        _scatter_kw.update(scatter_kw)
-    if fig_kw is not None:
-        _fig_kw.update(fig_kw)
-    if bin_kw is not None:
-        _bin_kw.update(bin_kw)
-    if legend_kw is not None:
-        _legend_kw.update(legend_kw)
-
-    # Create or retrieve existing figure
+    # Update default parameters with input# Create or retrieve existing figure
     if ax is None:
         fig, ax = plt.subplots(1, 1, **_fig_kw)
     else:
         fig = ax.figure
 
-    # Main axis
-    p1 = ax.scatter(mean_scores.flat, frac_pos.flat, **_scatter_kw)
+    f_star_hat = r_hat + c_hat
 
-    ax.set_aspect('equal')
+    ax.set_aspect("equal")
     ticks = [0, 0.25, 0.5, 0.75, 1]
     ax.set(
         xticks=ticks,
         yticks=ticks,
-        xlabel='Predicted probability',
-        ylabel='Fraction of positives',
-        xlim=(-0.03, 1.03),
-        ylim=(-0.03, 1.03),
+        xlabel="Predicted probability",
+        ylabel="Fraction of positives",
+        xlim=(0, 1.0),
+        ylim=(0, 1.0),
     )
+    ax.xaxis.label.set_fontsize(16)
+    ax.yaxis.label.set_fontsize(16)
 
-    if plot_bins:
-        for x in bins:
-            p_bin = ax.axvline(x, **_bin_kw)
-
-    if plot_calibration:
-        ax.plot([0, 1], [0, 1], ls="--", lw=1, color="black", zorder=0)
-        prob_bins, mean_bins = calibration_curve(frac_pos, counts, mean_scores)
-        p2, = ax.plot(mean_bins, prob_bins, **_calibration_kw)
-
-    # Histogram on upper axis
     divider = make_axes_locatable(ax)
-    if plot_hist:
-        ax_hist = divider.append_axes("top", size="10%", pad=0.0)
-        ax_hist.set_xlim(ax.get_xlim())
-        ax_hist.get_xaxis().set_visible(False)
-        ax_hist.get_yaxis().set_visible(False)
-        ax_hist.spines["right"].set_visible(False)
-        ax_hist.spines["top"].set_visible(False)
-        ax_hist.spines["left"].set_visible(False)
-        ax_hist.hist(mean_scores.flat, bins=bins, weights=counts.flat, **_hist_kw)
-
     # Colorbar on right axis
     if plot_cbar:
         ax_cb = divider.append_axes("right", size="4%", pad=0.05)
-        ax_cb.set_title('Count', loc='left')
-        Colorbar(ax_cb, mappable=sm, spacing='proportional')
+        ax_cb.set_title("Group", loc="left")
+        Colorbar(ax_cb, mappable=sm, spacing="proportional")
+    legend_handles = []
+    legend_labels = []
+    if plot_calibration:
+        ax.plot([0, 1], [0, 1], ls="--", lw=1, color="black", zorder=0)
+        # prob_bins, mean_bins = calibration_curve(y, f, n_bins=100)
+        sort_idx = np.argsort(f)
+        (line,) = ax.plot(f[sort_idx], c_hat[sort_idx], **_calibration_kw)
+        legend_handles.append(line)
+        legend_labels.append("Calibration curve")
 
-    # Legend on top of the figure
-    if plot_legend:
-        handles_labels = {
-            p1: p1.get_label(),
-        }
-        if plot_bins:
-            handles_labels[p_bin]= 'Bin edges'
-        if plot_calibration:
-            handles_labels[p2] = p2.get_label()
+    if groups == "all" or groups is None:
+        for i, leaf in enumerate(np.unique(leaf_ids)):
+            mask = leaf_ids == leaf
+            n_leaf = n_in_leaf[i]
+            if np.sum(mask) > 0:
+                # Sort by f values to create a proper curve
+                f_leaf = f[mask]
+                f_star_hat_leaf = f_star_hat[mask]
+                sort_idx = np.argsort(f_leaf)
+                # Get the color for this leaf from the colormap
+                leaf_color = sm.to_rgba(leaf)
+                # Make line width proportional to number of samples
+                line_width = +3 * (n_leaf / np.max(n_in_leaf))
+                ax.plot(
+                    f_leaf[sort_idx],
+                    f_star_hat_leaf[sort_idx],
+                    color=leaf_color,
+                    alpha=0.7,
+                    linewidth=line_width,
+                )
+    else:
+        for i, leaf in enumerate(np.unique(leaf_ids)):
+            mask = leaf_ids == leaf
+            n_leaf = n_in_leaf[i]
+            if np.sum(mask) > 0:
+                f_leaf = f[mask]
+                f_star_hat_leaf = f_star_hat[mask]
+                sort_idx = np.argsort(f_leaf)
+
+            if leaf in groups:
+                # Plot selected groups with color and add to legend
+                leaf_color = sm.to_rgba(leaf)
+                line_width = 1 + 5 * (n_leaf / np.max(n_in_leaf))
+                (line,) = ax.plot(
+                    f_leaf[sort_idx],
+                    f_star_hat_leaf[sort_idx],
+                    color=leaf_color,
+                    alpha=0.7,
+                    linewidth=line_width,
+                    zorder=2,
+                )
+                legend_handles.append(line)
+                legend_labels.append(f"Group {leaf}")
+            else:
+                # Plot non-selected groups in grey (background)
+                line_width = +3 * (n_leaf / np.max(n_in_leaf))
+                ax.plot(
+                    f_leaf[sort_idx],
+                    f_star_hat_leaf[sort_idx],
+                    color="grey",
+                    alpha=0.3,
+                    linewidth=line_width,
+                    zorder=1,
+                )
+
+    if legend_handles and plot_legend:
         ax.legend(
-            handles=handles_labels.keys(),
-            labels=handles_labels.values(),
-            **_legend_kw
+            legend_handles,
+            legend_labels,
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.2),
+            ncols=2,
+            framealpha=0,
         )
 
     return fig
