@@ -1,64 +1,45 @@
-import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.cluster import KMeans
-from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.tree import DecisionTreeRegressor
-from sklearn.utils.multiclass import check_classification_targets, type_of_target
-from sklearn.utils.validation import check_is_fitted, check_X_y, column_or_1d
-from sklearn.model_selection._split import check_cv
-from .helpers import (
-    CEstimator,
-    scores_to_bin_ids,
-    compute_GL_induced,
-    compute_GL_bias,
-    list_list_to_array,
-    bins_from_strategy,
-    compute_GL_uncorrected,
-    filter_valid_counts,
-)
+from sklearn.model_selection._split import train_test_split
 from .plot import grouping_diagram
-from sklearn.utils.validation import indexable
-from sklearn.base import clone
-from typing import List
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import HistGradientBoostingRegressor, RandomForestRegressor
+from sklearn.neural_network import MLPRegressor
+from sklearn.metrics import brier_score_loss
 
 
-class Partitioner:
-    """A class for partitionning the feature space, stratified by level sets
-    of predicted probabilities.
+class PartitioningEstimate:
+    """A class for partitioning-based estimation with honest splitting.
+
+    This class fits a partitioning estimator to predict residuals from calibrated
+    scores, enabling grouping loss estimation and risk analysis.
 
     Parameters
     ----------
-    estimator : object
-        An estimator to create the partition within level sets of predicted
-        probabilities. It must implement a fit method. In each bin, the
-        estimator is fitted using the fit method. Then, region assignments
-        are retrieved through the method defined with the `predict_method`
-        argument. The estimator must either support `sklearn.base.clone`
-        method (e.g. deriving from `sklearn.base.BaseEstimator`),
-        or implementing a `clone` method.
-    predict_method : str, default=None
-        The name of the method to call on `estimator` to get the class
-        assignments. If estimator is not None, `predict_method` should be set.
-    n_bins : int, default=15
-        The number of bins to split the probability space [0, 1] into.
-    strategy : {"uniform", "quantile"}, default="uniform"
-        The binning strategy used to create the bins. With uniform, same-width
-        bins are created. With quantile, same-mass bins are created.
-    binwise_fit : bool, default=True
-        When True, fits one partitioner per bin. Otherwise, fits one
-        partitioner on the whole feature space at once.
-    raise_on_fit_error : bool, default=False
-        Whether to raise an error when the estimator fails to fit on a bin.
-        If False, no partition is created on the failing bin and all samples
-        within this bin are assigned the same label. If True, raises an error.
-    verbose : int, default=0
-        Whether to print progress.
+    estimator : object or str
+        The estimator to use for partitioning (e.g., DecisionTreeRegressor, KMeans).
+        Can also be a string name like "decision_tree", "decision_stump", or "kmeans".
+    predict_method : str, optional
+        The method to call on the estimator to get partition assignments
+        (e.g., "apply" for trees, "predict" for KMeans). Default is None.
+    verbose : int, default=1
+        Controls verbosity of output during fitting and evaluation.
 
-    Raises
-    ------
-    Exception
-        When `raise_on_fit_error` is True and the estimator fails to fit on a
-        bin.
+    Attributes
+    ----------
+    calibrator : LogisticRegression
+        The fitted calibrator for probability scores.
+    tree : callable
+        Function mapping features to residual predictions.
+    r_j : ndarray
+        Mean residuals for each partition.
+    v_j : ndarray
+        Variance of residuals for each partition.
+    n_j : ndarray
+        Number of samples in each partition.
+    group_definitions : dict
+        Human-readable definitions of each partition/group.
 
     """
 
@@ -66,53 +47,34 @@ class Partitioner:
         self,
         estimator,
         predict_method: str = None,
-        n_bins: int = 15,
-        strategy: str = "uniform",
-        binwise_fit: bool = True,
-        raise_on_fit_error: bool = False,
         verbose: int = 0,
     ) -> None:
         self.estimator = estimator
-        self.n_bins = n_bins
-        self.strategy = strategy
-        self.binwise_fit = binwise_fit
         self.predict_method = predict_method
-        self.raise_on_fit_error = raise_on_fit_error
         self.verbose = verbose
 
     @classmethod
     def from_name(
         cls,
         name: str,
-        n_bins: int = 15,
-        strategy: str = "uniform",
-        binwise_fit: bool = True,
-        raise_on_fit_error: bool = False,
         verbose: int = 0,
         random_state: int = None,
     ):
-        """Load a predefined Partitioner instance from a name.
+        """Load a predefined partitioning estimator from a name.
 
         Parameters
         ----------
-        name : {"decision_tree", "decision_stump", "kmean", None}
-            The predefined estimator to use to partition the bins.
-        n_bins : int, default=15
-            The number of bins to split the probability space [0, 1] into.
-        strategy : {"uniform", "quantile"}, default="uniform"
-            The binning strategy used to create the bins. With uniform, same-width
-            bins are created. With quantile, same-mass bins are created.
-        binwise_fit : bool, default=True
-            When True, fits one partitioner per bin. Otherwise, fits one
-            partitioner on the whole feature space at once.
-        raise_on_fit_error : bool, default=False
-            Whether to raise an error when the estimator fails to fit on a bin.
-            If False, no partition is created on the failing bin and all samples
-            within this bin are assigned the same label. If True, raises an error.
+        name : {"decision_tree", "decision_stump", "kmeans", None}
+            The predefined estimator to use for partitioning.
         verbose : int, default=0
-            Whether to print progress.
-        random_state : int, default=none
-            Controls the randomness of the estimator used in the partitioner.
+            Controls verbosity of output.
+        random_state : int, default=None
+            Controls the randomness of the estimator.
+
+        Returns
+        -------
+        estimator : object or None
+            The configured estimator instance.
 
         """
         available_names = [
@@ -131,6 +93,7 @@ class Partitioner:
             estimator = DecisionTreeRegressor(
                 max_depth=10,
                 random_state=random_state,
+                min_samples_leaf=15,
             )
             predict_method = "apply"
 
@@ -150,584 +113,731 @@ class Partitioner:
             estimator = None
             predict_method = None
 
-        return cls(
-            estimator=estimator,
-            n_bins=n_bins,
-            strategy=strategy,
-            binwise_fit=binwise_fit,
-            raise_on_fit_error=raise_on_fit_error,
-            verbose=verbose,
-            predict_method=predict_method,
+        return estimator, predict_method
+
+    def fit(self, X, y_scores, y_true, seed: int = 42):
+        """
+        Fit the partitioning estimator with honest splitting.
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            The input features.
+        y_scores : array-like of shape (n_samples,)
+            The predicted probability scores from a classifier.
+        y_true : array-like of shape (n_samples,)
+            The true binary labels.
+        Returns
+        -------
+        self : object
+            Fitted estimator.
+        """
+        if self.verbose > 0:
+            print("Starting fit process...")
+
+        y_scores = y_scores.reshape(-1, 1)
+        X_train, X_test, y_scores_train, y_scores_test, y_true_train, y_true_test = (
+            train_test_split(X, y_scores, y_true, test_size=0.5, random_state=seed)
         )
 
-    def fit_bins(self, y_scores=None):
-        """Create bins from strategy, number of bins and proba distribution
-        if necessary.
-
-        Parameters
-        ----------
-        y_scores : array-like
-            The probabilities from which to derive the bins if
-            strategy="quantile".
-
-        """
-        self.bins_ = bins_from_strategy(self.n_bins, self.strategy, y_scores)
-
-    def transform_bins(self, y_scores):
-        """Convert probabilities to their bin assignment.
-
-        Parameters
-        ----------
-        y_scores : array-like of shape (n,)
-            The probabilities from which to derive the assignments.
-
-        Returns
-        -------
-        array-like of shape (n,)
-            The array of bin indices each probability falls into.
-
-        """
-        if not hasattr(self, "bins_"):
-            raise ValueError("fit_bins must have been called before transform_bins.")
-        y_bins, _ = scores_to_bin_ids(y_scores, self.bins_, None)
-        return y_bins
-
-    def fit(self, X, y_scores, y_true=None):
-        """Fit the partitioner.
-
-        Parameters
-        ----------
-        X : array-like of shape (n, d)
-            The features.
-        y_scores : array-like of shape (n,)
-            The probabilities of each sample.
-        y_true : array-like of shape (n,), optional
-            The true labels. Used by some partitioner to find the best
-            partitions, by default None
-
-        Returns
-        -------
-        Partitioner
-            Returns the current instance.
-
-        """
-        y_scores = GLEstimator._validate_scores(y_scores)
-
-        if self.estimator is None:
-            raise ValueError(
-                "A Partitioner with estimator=None cannot be fitted. To use "
-                "predefined partitions, use the partition argument of "
-                "GLEstimator.fit instead."
+        X_train, X_cal, y_scores_train, y_scores_cal, y_true_train, y_true_cal = (
+            train_test_split(
+                X_train, y_scores_train, y_true_train, test_size=0.2, random_state=seed
             )
+        )
 
-        if not hasattr(self.estimator, "fit"):
-            raise AttributeError(
-                f'partitioner {self.estimator} must implement a "fit" method.'
-            )
+        if self.verbose > 0:
+            print(f"Calibration set size: {len(X_cal)}")
+            print(f"Train set size: {len(X_train)}")
+            print(f"Test set size: {len(X_test)}")
 
-        if not hasattr(self.estimator, self.predict_method):
-            raise AttributeError(
-                f'"{self.estimator.__class__.__name__}" object has no '
-                f'attribute "{self.predict_method}". Make sure `predict_method` '
-                f'is set accordingly to the estimator "{self.estimator}".'
-            )
+        self.calibrate(y_scores_cal, y_true_cal)
+        self.train(X_train, y_scores_train, y_true_train)
+        self.evaluate(X_test, y_scores_test, y_true_test)
 
-        self.fit_bins(y_scores)  # bins are stored in self.bins_
-
-        if self.binwise_fit:
-            y_bins = self.transform_bins(y_scores)
-            n_bins = len(self.bins_) - 1
+        if hasattr(X_test, "columns"):
+            feature_names = X_test.columns.tolist()
         else:
-            y_bins = np.zeros_like(y_scores)
-            n_bins = 1
+            feature_names = None
+        self.get_group_definitions(X_test, feature_names=feature_names)
 
-        fitted_partitioners_ = []
-        for i in range(n_bins):
-            if self.verbose > 0:
-                print(f"Bin {i+1}/{n_bins}: partitioning.")
-            bin_idx = y_bins == i
-            X_bin = X[bin_idx, :]
-            n_samples_bin = X_bin.shape[0]
+        if self.verbose > 0:
+            print("Fit process completed.")
 
-            if n_samples_bin > 0:
-                try:
-                    partitioner_bin = clone(self.estimator)
-                except TypeError:
-                    if not hasattr(self.estimator, "clone"):
-                        raise AttributeError(
-                            f'Estimator "{self.estimator}" must either support '
-                            f"sklearn.base.clone, or implement a `clone` method "
-                            f"itself."
-                        )
-                    partitioner_bin = self.estimator.clone()
-                try:
-                    if y_true is None:
-                        partitioner_bin.fit(X_bin)
-                    else:
-                        partitioner_bin.fit(X_bin, y_true[bin_idx])
-                except Exception as e:
-                    if self.raise_on_fit_error:
-                        raise e
-                    else:
-                        if self.verbose:
-                            print(
-                                f"WARNING: No partition created in bin #{i}: "
-                                f"estimator {self.estimator} failed to fit. "
-                                f'"{e}"'
-                            )
-                        partitioner_bin = None
-            else:
-                partitioner_bin = None
-            fitted_partitioners_.append(partitioner_bin)
-
-        self.fitted_partitioners_ = fitted_partitioners_
         return self
 
-    def predict(self, X, y_scores):
-        """Get the region assignments.
+    def calibrate(self, y_scores, y_true):
+        """
+        Calibrate the predicted scores using logistic regression.
+        Parameters
+        ----------
+        y_scores : array-like of shape (n_samples,)
+            The predicted probability scores from a classifier.
+        y_true : array-like of shape (n_samples,)
+            The true binary labels.
+        Returns
+        -------
+        self : object
+            Fitted calibrator.
+        """
+        if self.verbose > 1:
+            print("Calibrating scores...")
+
+        calibrator = LogisticRegression()
+        calibrator.fit(y_scores, y_true)
+        self.calibrator = calibrator
+
+        if self.verbose > 1:
+            print("Calibration completed.")
+
+        return self
+
+    def train(self, X, y_scores, y_true):
+        """
+        Train the partitioning estimator on residuals.
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            The input features.
+        y_scores : array-like of shape (n_samples,)
+            The predicted probability scores from a classifier.
+        y_true : array-like of shape (n_samples,)
+            The true binary labels.
+        Returns
+        -------
+        self : object
+            Fitted partitioning estimator.
+        """
+        if self.verbose > 1:
+            print("Training partitioning estimator...")
+
+        if isinstance(self.estimator, str):
+            self.estimator, self.predict_method = PartitioningEstimate.from_name(
+                self.estimator
+            )
+
+        residuals_train = y_true - self.calibrator.predict(y_scores)
+        self.estimator.fit(X, residuals_train)
+
+        if self.verbose > 1:
+            print("Training completed.")
+
+        return self
+
+    def evaluate(self, X, y_scores, y_true):
+        """
+        Evaluate the partitioning estimator on a test set.
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            The input features.
+        y_scores : array-like of shape (n_samples,)
+            The predicted probability scores from a classifier.
+        y_true : array-like of shape (n_samples,)
+            The true binary labels.
+        Returns
+        -------
+        self : object
+            Evaluated partitioning estimator with computed statistics.
+        """
+        if self.verbose > 1:
+            print("Evaluating on test set...")
+
+        self.y_scores = y_scores
+        self.y_true = y_true
+        self.X = X
+        leaf_indices = self.estimator.apply(X)
+
+        c_hat = self.calibrator.predict_proba(y_scores)[:, 1]
+
+        v_j = np.zeros(max(leaf_indices) + 1)
+        r_j = np.zeros(max(leaf_indices) + 1)
+        n_j = np.zeros(max(leaf_indices) + 1)
+        # Vectorized computation using bincount for better performance
+        n_j = np.bincount(leaf_indices, minlength=max(leaf_indices) + 1)
+        # Compute residuals once
+        residuals = y_true - c_hat
+
+        # Vectorized computation of means and variances
+        r_j = np.divide(
+            np.bincount(leaf_indices, weights=residuals),
+            n_j,
+            out=np.zeros_like(n_j, dtype=float),
+            where=n_j > 0,
+        )
+        # Compute variance using E[X^2] - E[X]^2 formula
+        residuals_sq = residuals**2
+        mean_sq = np.divide(
+            np.bincount(leaf_indices, weights=residuals_sq),
+            n_j,
+            out=np.zeros_like(n_j, dtype=float),
+            where=n_j > 0,
+        )
+        v_j = mean_sq - r_j**2
+
+        # Apply Bessel's correction (ddof=1)
+        v_j *= n_j / (n_j - 1)
+        v_j = np.where(n_j > 1, v_j, 0)
+
+        def r(X):
+            leaf_indices = self.estimator.apply(X)
+            return r_j[leaf_indices]
+
+        self.cal_err = np.mean(np.square(y_scores.flatten() - c_hat))
+        self.tree = r
+        self.r_j = r_j
+        self.v_j = v_j
+        self.n_j = n_j
+
+        if self.verbose > 0:
+            print(f"Evaluation completed. Found {len(np.unique(leaf_indices))} groups.")
+            print(f"Calibration error: {self.cal_err:.4f}")
+
+        return self
+
+    def predict(self, X):
+        """
+        Predict honest residuals for new data points.
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            The input features.
+        Returns
+        -------
+        r_hat : array-like of shape (n_samples,)
+            The predicted residuals.
+        """
+        return self.tree(X)
+
+    def apply(self, X):
+        return self.estimator.apply(X)
+
+    def plot(self, groups="all"):
+        # check_is_fitted(self)
+        leaf_ids = self.apply(self.X)
+        n_in_leaf = self.n_j[leaf_ids]
+        grouping_diagram(
+            c_hat=self.calibrator.predict_proba(self.y_scores)[:, 1],
+            r_hat=self.predict(self.X),
+            n_in_leaf=n_in_leaf,
+            f=self.y_scores.flatten(),
+            leaf_ids=leaf_ids,
+            groups=groups,
+        )
+
+    def get_group_definitions(self, X, feature_names=None):
+        """
+        Extract human-readable decision rules for each partition/group.
 
         Parameters
         ----------
-        X : array-like of shape (n, d)
-            The features.
-        y_scores : array-like of shape (n,)
-            The probabilities of each sample.
+        X : array-like of shape (n_samples, n_features)
+            The input features used to traverse the tree.
+        feature_names : list of str, optional
+            Names of features for readable output. If None, uses X_0, X_1, etc.
 
         Returns
         -------
-        array-like of shape (n,)
-            The assignments of each sample to the partition.
+        group_definitions : dict
+            Dictionary mapping leaf IDs to group information including rules,
+            sample counts, and heterogeneity measures.
         """
-        check_is_fitted(self)
+        tree = self.estimator
+        # Convert to numpy array if pandas DataFrame
+        X_array = X.values if hasattr(X, "values") else np.asarray(X)
 
-        labels = np.full((X.shape[0], 2), np.nan)
-        y_bins, _ = scores_to_bin_ids(y_scores, self.bins_, None)
+        # Get unique leaf IDs
+        leaf_ids = tree.apply(X_array)
+        unique_leaves = np.unique(leaf_ids)
 
-        for i in range(len(self.bins_) - 1):
-            if self.verbose > 0:
-                print(f"Bin {i+1}/{len(self.bins_)-1}: assigning.")
-            bin_idx = y_bins == i  # restrict to samples belonging to bin i
-            X_bin = X[bin_idx, :]
-            n_samples_bin = X_bin.shape[0]
-            partitioner = self.fitted_partitioners_[i if self.binwise_fit else 0]
+        group_definitions = {}
+        if feature_names is None:
+            feature_names = [f"X_{i}" for i in range(X_array.shape[1])]
+        elif all(isinstance(f, int) for f in feature_names):
+            feature_names = [f"X_{i}" for i in feature_names]
 
-            # Store partition id
-            if partitioner is not None and n_samples_bin > 0:
-                predict_method = getattr(partitioner, self.predict_method)
-                labels[bin_idx, 1] = predict_method(X_bin)
+        for leaf_id in unique_leaves:
+            # Get samples in this leaf
+            samples_in_leaf = X_array[leaf_ids == leaf_id]
 
+            # Get the path to this leaf
+            path = tree.decision_path(samples_in_leaf[:1]).toarray()[0]
+
+            # Extract the rules
+            raw_rules = []
+
+            # Get the path from root to leaf
+            feature = tree.tree_.feature
+            threshold = tree.tree_.threshold
+
+            for node_id in range(len(path)):
+                if path[node_id] == 1:  # This node is in the path
+                    if feature[node_id] != -2:  # Not a leaf node
+                        # Determine if we went left or right
+                        sample_feature_value = samples_in_leaf[0, feature[node_id]]
+                        feat_name = feature_names[feature[node_id]]
+                        if sample_feature_value <= threshold[node_id]:
+                            raw_rules.append((feat_name, "<=", threshold[node_id]))
+                        else:
+                            raw_rules.append((feat_name, ">", threshold[node_id]))
+
+            # Combine rules for the same feature
+            feature_bounds = {}
+            for feat_name, operator, value in raw_rules:
+                if feat_name not in feature_bounds:
+                    feature_bounds[feat_name] = {"min": None, "max": None}
+
+                if operator == "<=":
+                    if (
+                        feature_bounds[feat_name]["max"] is None
+                        or value < feature_bounds[feat_name]["max"]
+                    ):
+                        feature_bounds[feat_name]["max"] = value
+                else:  # operator == ">"
+                    if (
+                        feature_bounds[feat_name]["min"] is None
+                        or value > feature_bounds[feat_name]["min"]
+                    ):
+                        feature_bounds[feat_name]["min"] = value
+
+            # Convert bounds to readable rules
+            combined_rules = []
+            for feat_name, bounds in feature_bounds.items():
+                if bounds["min"] is not None and bounds["max"] is not None:
+                    combined_rules.append(
+                        f"{bounds['min']:.1f} < {feat_name} <= {bounds['max']:.1f}"
+                    )
+                elif bounds["min"] is not None:
+                    combined_rules.append(f"{feat_name} > {bounds['min']:.1f}")
+                elif bounds["max"] is not None:
+                    combined_rules.append(f"{feat_name} <= {bounds['max']:.1f}")
+
+            group_definitions[leaf_id] = {
+                "rules": combined_rules,
+                "n_samples": len(samples_in_leaf),
+                "sample_indices": np.where(leaf_ids == leaf_id)[0],
+                "heterogeneity": self.r_j[leaf_id],
+            }
+        self.group_definitions = group_definitions
+        return group_definitions
+
+    def groups(self):
+        """
+        Convert group definitions to a human-readable string format.
+
+        Parameters
+        ----------
+        group_definitions : dict
+            Dictionary with leaf IDs as keys and group information as values
+
+        Returns
+        -------
+        str
+            A formatted string with group definitions
+        """
+        group_definitions = self.group_definitions
+        lines = []
+        lines.append("=" * 80)
+        lines.append("GROUP DEFINITIONS")
+        lines.append("=" * 80)
+
+        for leaf_id in sorted(group_definitions.keys()):
+            info = group_definitions[leaf_id]
+            lines.append(f"\nGroup {leaf_id}:")
+            lines.append(f"  Heterogeneity detected: {info['heterogeneity']:.4f}")
+            lines.append(f"  Number of samples: {info['n_samples']}")
+            lines.append("  Rules:")
+            if info["rules"]:
+                for rule in info["rules"]:
+                    lines.append(f"    • {rule}")
             else:
-                # no partitioner was fit in this bin because not enough training samples
-                # hence gather all test samples in same group
-                labels[bin_idx, 1] = np.zeros(n_samples_bin)
+                # lines.append(f"    • No splitting rules (root/single leaf)")
+                lines.append("-" * 80)
 
-            # Store bin id
-            labels[bin_idx, 0] = i
+        result = "\n".join(lines)
+        print(result)
+        return self.group_definitions
 
-        return labels
+
+class ResidualEstimator:
+    """Estimate residuals for a fitted probabilistic classifier.
+
+    This class provides methods to estimate the residuals of a probabilistic
+    classifier by partitioning the feature space and analyzing calibration
+    residuals within each partition.
+
+    Parameters
+    ----------
+    partitioning_estimate : str or PartitioningEstimate, default="decision_tree"
+        The partitioning strategy to use for estimating the residuals.
+        If string, must be one of {"decision_tree", "decision_stump", "kmeans", None}.
+        If PartitioningEstimate instance, uses the provided partitioner.
+    train_size : float, default=0.5
+        The proportion of the dataset to use for training the partitioner.
+        The remaining data is used for evaluation to avoid overfitting.
+    random_state : int, default=None
+        Controls the randomness of the partitioner and data splitting.
+    verbose : int, default=0
+        Controls the verbosity of output during fitting and estimation.
+        Higher values produce more detailed output.
+
+    Attributes
+    ----------
+    partitioner : PartitioningEstimate
+        The fitted partitioning estimator.
+
+    Examples
+    --------
+    >>> from glestimation import ResidualEstimator
+    >>> estimator = ResidualEstimator(partitioning_estimate="decision_tree")
+    >>> estimator.fit(X, y_scores, y_true)
+    >>> residuals = estimator.predict(X_new)
+    """
+
+    def __init__(
+        self,
+        estimator: str = "hgb",
+        random_state: int = None,
+        verbose: int = 0,
+    ) -> None:
+        self.estimator = HistGradientBoostingRegressor(
+            random_state=random_state,
+        )
+        self.random_state = random_state
+        self.verbose = verbose
+
+    def from_name(
+        cls,
+        name: str,
+        verbose: int = 0,
+        random_state: int = None,
+    ):
+        """Load a predefined partitioning estimator from a name.
+
+        Parameters
+        ----------
+        name : {"decision_tree", "decision_stump", "kmeans", None}
+            The predefined estimator to use for partitioning.
+        verbose : int, default=0
+            Controls verbosity of output.
+        random_state : int, default=None
+            Controls the randomness of the estimator.
+
+        Returns
+        -------
+        estimator : object or None
+            The configured estimator instance.
+
+        """
+        available_names = [
+            "hgb",
+            "rf",
+            "mlp",
+            None,
+        ]
+
+        if name not in available_names:
+            raise ValueError(
+                f'Unknown name "{name}". Available names are: {available_names}.'
+            )
+
+        if name == "hgb":
+            estimator = HistGradientBoostingRegressor(
+                random_state=random_state,
+            )
+
+        elif name == "rf":
+            estimator = RandomForestRegressor(
+                n_estimators=100,
+                random_state=random_state,
+            )
+
+        elif name == "mlp":
+            estimator = MLPRegressor(
+                hidden_layer_sizes=(100,),
+                max_iter=500,
+                random_state=random_state,
+            )
+
+        elif name is None:
+            estimator = None
+
+        return estimator
+
+    def fit(self, X, y_scores, y_true, seed: int = 42):
+        """
+        Fit the ResidualEstimator with data.
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            The input features.
+        y_scores : array-like of shape (n_samples,)
+            The predicted probability scores from a classifier.
+        y_true : array-like of shape (n_samples,)
+            The true binary labels.
+        Returns
+        -------
+        self : object
+            Fitted ResidualEstimator.
+        """
+        if self.verbose > 0:
+            print("Starting fit process...")
+
+        y_scores = y_scores.reshape(-1, 1)
+
+        X_train, X_test, y_scores_train, y_scores_test, y_true_train, y_true_test = (
+            train_test_split(X, y_scores, y_true, test_size=0.5, random_state=seed)
+        )
+
+        X_train, X_cal, y_scores_train, y_scores_cal, y_true_train, y_true_cal = (
+            train_test_split(
+                X_train, y_scores_train, y_true_train, test_size=0.2, random_state=seed
+            )
+        )
+
+        if self.verbose > 0:
+            print(f"Calibration set size: {len(X_cal)}")
+            print(f"Train set size: {len(X_train)}")
+            print(f"Test set size: {len(X_test)}")
+
+        self.calibrate(y_scores_cal, y_true_cal)
+        self.train(X_train, y_scores_train, y_true_train)
+        self.evaluate(X_test, y_scores_test, y_true_test)
+
+        if self.verbose > 0:
+            print("Fit process completed.")
+
+        return self
+
+    def calibrate(self, y_scores, y_true):
+        """
+        Calibrate the predicted scores using logistic regression.
+        Parameters
+        ----------
+        y_scores : array-like of shape (n_samples,)
+            The predicted probability scores from a classifier.
+        y_true : array-like of shape (n_samples,)
+            The true binary labels.
+        Returns
+        -------
+        self : object
+            Fitted calibrator.
+        """
+        if self.verbose > 1:
+            print("Calibrating scores...")
+
+        calibrator = LogisticRegression()
+        calibrator.fit(y_scores, y_true)
+        self.calibrator = calibrator
+
+        if self.verbose > 1:
+            print("Calibration completed.")
+
+        return self
+
+    def train(self, X, y_scores, y_true):
+        """
+        Train the partitioning estimator on residuals.
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            The input features.
+        y_scores : array-like of shape (n_samples,)
+            The predicted probability scores from a classifier.
+        y_true : array-like of shape (n_samples,)
+            The true binary labels.
+        Returns
+        -------
+        self : object
+            Fitted partitioning estimator.
+        """
+        if self.verbose > 1:
+            print("Training partitioning estimator...")
+
+        if isinstance(self.estimator, str):
+            self.estimator = ResidualEstimator.from_name(self.estimator)
+
+        residuals_train = y_true - self.calibrator.predict(y_scores)
+        self.estimator.fit(X, residuals_train)
+
+        if self.verbose > 1:
+            print("Training completed.")
+
+        return self
+
+    def evaluate(self, X, y_scores, y_true):
+        c_hat = self.calibrator.predict_proba(y_scores)[:, 1]
+        self.cal_err = np.mean(np.square(y_scores.flatten() - c_hat))
+
+        self.r_j = self.estimator.predict(X)
+
+        return self
+
+    def predict(self, X):
+        return self.estimator.predict(X)
 
 
 class GLEstimator:
     """Estimate the grouping loss of a fitted probabilistic classifier.
 
+    This class provides methods to estimate the grouping loss (GL) of a probabilistic
+    classifier by partitioning the feature space and analyzing calibration residuals
+    within each partition.
+
     Parameters
     ----------
-    classifier : object
-        The classifier for which to estimate the grouping loss. The
-        classifier must implement a `predict_proba` method. The classifier
-        must already be fit since GLEstimator only evaluates the classifier.
-    partitioner : {"decision_tree", "decision_stump", "kmean", None}
-                  | Partitioner, optional
+    partitioning_estimate : str or PartitioningEstimate, default="decision_tree"
         The partitioning strategy to use for estimating the grouping loss.
-        If string given, use corresponding predefined strategy. If
-        `Partitioner` instance given, use this as partitioner.
-        By default "decision_tree".
-    train_size : float, optional
-        The size of the training set size. To avoid overfitting, the
-        estimation of the grouping loss is evaluated on a test set and the
-        partition is created on the training set. By default 0.5.
-    random_state : int, optional
-        Controls the randomness of the estimator used in the partitioner.
-        By default None.
-    verbose : int, optional
-        Whether to print progress. By default 0.
-    """
+        If string, must be one of {"decision_tree", "decision_stump", "kmeans", None}.
+        If PartitioningEstimate instance, uses the provided partitioner.
+    train_size : float, default=0.5
+        The proportion of the dataset to use for training the partitioner.
+        The remaining data is used for evaluation to avoid overfitting.
+    random_state : int, default=None
+        Controls the randomness of the partitioner and data splitting.
+    verbose : int, default=0
+        Controls the verbosity of output during fitting and estimation.
+        Higher values produce more detailed output.
 
-    default_n_bins: int = 15
-    default_strategy: str = "uniform"
-    default_binwise_fit: bool = True
+    Attributes
+    ----------
+    partitioner : PartitioningEstimate
+        The fitted partitioning estimator.
+    gl_estimate : float
+        The bias-corrected grouping loss estimate.
+    gl_uncorrected : float
+        The uncorrected grouping loss (without bias correction).
+    gl_bias : float
+        The estimated bias in the grouping loss.
+    gl_j : ndarray
+        Per-partition grouping loss values.
+
+    Examples
+    --------
+    >>> from glestimation import GLEstimator
+    >>> estimator = GLEstimator(partitioning_estimate="decision_tree")
+    >>> estimator.fit(X, y_scores, y_true)
+    >>> estimator.estimate()
+    >>> print(estimator.GL())
+    """
 
     def __init__(
         self,
-        classifier,
-        partitioner: str | Partitioner = "decision_tree",
-        train_size: float = 0.5,
+        partitioning_estimate: str | PartitioningEstimate = "decision_tree",
         random_state: int = None,
         verbose: int = 0,
+        residual_estimator: ResidualEstimator = None,
     ) -> None:
-        self.classifier = classifier
-        self.partitioner = partitioner
-        self.train_size = train_size
+        self.partitioner = PartitioningEstimate(partitioning_estimate)
         self.random_state = random_state
         self.verbose = verbose
+        self.residual_estimator = (
+            ResidualEstimator(residual_estimator)
+            if residual_estimator is not None
+            else None
+        )
 
-    @staticmethod
-    def _validate_scores(y_scores):
-        """Uniformize probability array shape to (n,) from either (n,), (n, 1)
-        or (n, 2)."""
-        if y_scores.ndim == 2 and y_scores.shape[1] == 2:
-            y_scores = y_scores[
-                :, 1
-            ]  # since y_type is binary take only the positive class
-        elif y_scores.ndim != 1:
-            raise ValueError(
-                f"Invalid proba array shape: {y_scores.shape}. Expecting (n,)"
-            )
-
-        y_scores = np.array(y_scores).squeeze()
-        return y_scores
-
-    @staticmethod
-    def _is_valid_classifier(est):
-        """Check what is considered a valid classifier."""
-        return hasattr(est, "predict_proba")
-
-    @staticmethod
-    def _probas_from_estimator(est, X):
-        """Get the probability array by checking if estimator is either a
-        classifier or an array."""
-        if GLEstimator._is_valid_classifier(est):
-            y_scores = est.predict_proba(X)
-        else:
-            try:
-                y_scores = np.array(est)
-                y_scores.shape[0]
-            except Exception:
-                raise ValueError(
-                    "classifier must either implement a predict_proba method, "
-                    "or be an array of probability."
-                )
-            if X.shape[0] != y_scores.shape[0]:
-                raise ValueError(
-                    f"Shape mismatch between proba array given as classifier "
-                    f"and the data given in fit: X.shape[0]={X.shape[0]} "
-                    f"y_scores.shape[0]={y_scores.shape[0]}"
-                )
-        y_scores = np.array(y_scores)
-        y_scores = GLEstimator._validate_scores(y_scores)
-        return y_scores
-
-    def fit(self, X, y, test_data=None, partition=None):
-        """Create the partitions and evaluate the grouping loss. After fit,
-        the metrics are accessible at GL_, GL_ind_, GL_bias_.
-
+    def fit(self, X, y_scores, y_true, seed: int = 42):
+        """
+        Fit the GLEstimator with data.
         Parameters
         ----------
-        X : array-like of shape (n, d)
-            The features.
-        y : array-like of shape (n,)
-            The binary labels.
-        test_data : tuple of array-likes, optional
-            The test data on which to evaluate the grouping loss.
-            If None, the data (X, y) is split into a training and test data
-            based on the `train_size` argument. The partitions are created
-            on the training data and the grouping loss is evaluated on the test
-            data. If `(X2, y2)` given, (X, y) is taken as training set and
-            (X2, y2) as test set. If `classifier` is not an estimator but an
-            array of probabilities, then `test_data` must either be None or
-            a tuple (X2, y2, y_scores2). By default None.
-        partition : array-like of shape (n,), optional
-            The predefined partition along which to evaluate the grouping loss.
-            If set, (X, y) is taken as the test data on which is evaluated the
-            grouping loss. `partition` and `test_data` are thus incompatible
-            and only one of them can be set at the same time. If None,
-            the partition is created using the `partitioner`. By default None.
-
+        X : array-like of shape (n_samples, n_features)
+            The input features.
+        y_scores : array-like of shape (n_samples,)
+            The predicted probability scores from a classifier.
+        y_true : array-like of shape (n_samples,)
+            The true binary labels.
         Returns
         -------
-        GLEstimator
-            The fitted instance.
-
+        self : object
+            Fitted GLEstimator.
         """
-        X, y = check_X_y(X, y)
-        check_classification_targets(y)
-        y_type = type_of_target(y, input_name="y")
-        if y_type != "binary":
-            raise ValueError(f"y must be binary. Got {y_type}.")
-        y = column_or_1d(y)
+        if self.residual_estimator is not None:
+            self.residual_estimator.fit(X, y_scores, y_true, seed=seed)
 
-        if partition is not None and test_data is not None:
-            raise ValueError(
-                f"partition and test_data cannot be both not None. "
-                f"Got partition={type(partition)} and test_data={type(test_data)}."
-            )
-
-        # Get the scores
-        y_scores = GLEstimator._probas_from_estimator(self.classifier, X)
-
-        if self.partitioner is None or isinstance(self.partitioner, str):
-            self.partitioner_ = Partitioner.from_name(
-                name=self.partitioner,
-                n_bins=GLEstimator.default_n_bins,
-                strategy=GLEstimator.default_strategy,
-                binwise_fit=GLEstimator.default_binwise_fit,
-                random_state=self.random_state,
-                verbose=self.verbose - 1,
-            )
         else:
-            self.partitioner_: Partitioner = self.partitioner
-
-        if partition is not None:
-            if (
-                hasattr(self.partitioner_, "estimator")
-                and self.partitioner_.estimator is not None
-            ):
-                raise ValueError(
-                    "Specifying a custom partition is only available when "
-                    "partitioner=None or "
-                    "partitioner=Partitioner.from_name(None, ...)"
-                )
-            self.partitioner_.fit_bins(y_scores)
-            return self._evaluate(X, y, y_scores, partition=partition)
-
-        if test_data is None:
-            self.partitioner_.fit_bins(y_scores)
-            y_bins, _ = scores_to_bin_ids(
-                y_scores, self.partitioner_.bins_, self.partitioner_.strategy
-            )
-            # We use a stratified shuffle split to keep the split balance in each bin
-            sss = StratifiedShuffleSplit(
-                n_splits=1, train_size=self.train_size, random_state=self.random_state
-            )
-            train_index, test_index = next(sss.split(X, y_bins))
-            X_train = X[train_index]
-            y_train = y[train_index]
-            X_test = X[test_index]
-            y_test = y[test_index]
-            y_scores_train = y_scores[train_index]
-            y_scores_test = y_scores[test_index]
-        else:
-            X_train, y_train = X, y
-            y_scores_train = y_scores
-            if GLEstimator._is_valid_classifier(self.classifier):
-                X_test, y_test = test_data
-                y_scores_test = GLEstimator._probas_from_estimator(
-                    self.classifier, X_test
-                )
-            else:
-                try:
-                    X_test, y_test, y_scores_test = test_data
-                except Exception as e:
-                    raise ValueError(
-                        f"When manually passing the probabilities as classifier,"
-                        f"the test_data must also pass the probabilities "
-                        f"(X, y, y_probas). {e}"
-                    )
-
-                y_scores_test = GLEstimator._probas_from_estimator(
-                    y_scores_test, X_test
-                )
-
-        if self.verbose > 0:
-            print("Fitting.")
-        self._fit(X_train, y_train, y_scores_train)
-        self._evaluate(X_test, y_test, y_scores_test)
+            self.partitioner.fit(X, y_scores, y_true, seed=seed)
+        self.brier = brier_score_loss(y_true, y_scores)
         return self
 
-    def _fit(self, X, y, y_scores):
-        self.partitioner_.fit(X, y_scores, y)
-        self.n_features_in_ = X.shape[1]
-        return self
+    def estimate(self):
+        """
+        Estimate the grouping loss (GL) using the fitted partitioner.
+        Returns
+        -------
+        self : object
+            GLEstimator with computed GL estimates.
+        """
 
-    def _evaluate(self, X, y, y_scores, partition=None):
-        if partition is None:
-            check_is_fitted(self)
-
-        y_bins = self.partitioner_.transform_bins(y_scores)
-
-        if partition is not None:
-            if partition.shape != y_bins.shape:
-                raise ValueError(
-                    f"Given partition must have the same shape as y_probas. "
-                    f"Got partition.shape={partition.shape} and "
-                    f"y_probas.shape={y_scores.shape}"
-                )
-            labels = np.stack([y_bins, partition], axis=1)
+        if self.residual_estimator is not None:
+            r_j = self.residual_estimator.r_j
+            gl_uncorrected = np.mean(r_j**2)
+            gl_bias = "Non existant due to using a residual estimator"
+            gl_estimate = gl_uncorrected
+            self.gl_estimate = 2 * gl_estimate
+            self.gl_bias = gl_bias
+            self.gl_uncorrected = 2 * gl_uncorrected
+            self.cal_err = 2 * self.residual_estimator.cal_err
         else:
-            labels = self.partitioner_.predict(X, y_scores)
+            r_j = self.partitioner.r_j
+            n_j = self.partitioner.n_j
+            v_j = self.partitioner.v_j
+            N = np.sum(n_j)
 
-        frac_pos = []
-        counts = []
-        mean_scores = []
+            gl_j_uncorrected = r_j**2
+            gl_uncorrected = np.sum(n_j * gl_j_uncorrected) / N
 
-        for i in range(len(self.partitioner_.bins_) - 1):
-            if self.verbose:
-                print(f"Bin {i+1}/{len(self.partitioner_.bins_) - 1}: evaluating.")
-            bin_idx = y_bins == i
-            y_bin = y[bin_idx]
-            y_scores_bin = y_scores[bin_idx]
+            gl_j_bias = np.divide(v_j, n_j, out=np.zeros_like(v_j), where=n_j != 0)
+            gl_bias = np.sum(n_j * gl_j_bias) / N
 
-            unique_labels, unique_counts = np.unique(
-                labels[bin_idx, 1], return_counts=True
-            )
+            gl_j = gl_j_uncorrected - gl_j_bias
+            gl_estimate = np.sum(n_j * gl_j) / N
 
-            frac_pos.append([])
-            counts.append([])
-            mean_scores.append([])
-
-            for label in unique_labels:
-                if len((labels == label)[bin_idx, 1]) > 0:
-                    frac_pos[i].append(np.mean(y_bin[(labels == label)[bin_idx, 1]]))
-                    mean_scores[i].append(
-                        np.mean(y_scores_bin[(labels == label)[bin_idx, 1]])
-                    )
-
-            counts[i].extend(unique_counts)
-
-        frac_pos = list_list_to_array(frac_pos, fill_value=0)
-        counts = list_list_to_array(counts, fill_value=0, dtype=int)
-        mean_scores = list_list_to_array(mean_scores, fill_value=0)
-
-        self.frac_pos_ = frac_pos
-        self.counts_ = counts
-        self.mean_scores_ = mean_scores
-
-        self.c_hat_ = CEstimator(y_scores, y).c_hat()
-        self.y_bins_, _ = scores_to_bin_ids(y_scores, self.partitioner_.bins_, None)
+            self.gl_j = 2 * gl_j
+            self.gl_uncorrected = 2 * gl_uncorrected
+            self.gl_bias = 2 * gl_bias
+            self.gl_estimate = 2 * gl_estimate
+            self.cal_err = 2 * self.partitioner.cal_err
 
         return self
 
     def GL(self, psr: str = "brier"):
-        return self.GL_uncorrected(psr) - self.GL_bias(psr) - self.GL_induced(psr)
+        return self.gl_estimate
 
     def GL_uncorrected(self, psr: str = "brier"):
         if not self.is_fitted():
             raise ValueError("GLEstimator is not fitted.")
 
-        return compute_GL_uncorrected(self.frac_pos_, self.counts_, psr)
+        return self.gl_uncorrected
 
     def GL_bias(self, psr: str = "brier"):
         if not self.is_fitted():
             raise ValueError("GLEstimator is not fitted.")
 
-        return compute_GL_bias(self.frac_pos_, self.counts_, psr)
-
-    def GL_induced(self, psr: str = "brier"):
-        if not self.is_fitted():
-            raise ValueError("GLEstimator is not fitted.")
-
-        return compute_GL_induced(self.c_hat_, self.y_bins_, psr)
+        return self.gl_bias
 
     def metrics(self, psr: str = "brier"):
         if not self.is_fitted():
             raise ValueError('GLEstimator must be fitted to call "metrics".')
 
-        GL_ind = self.GL_induced(psr)
-        GL_uncorrected = self.GL_uncorrected(psr)
-        GL_bias = self.GL_bias(psr)
-        GL = GL_uncorrected - GL_bias - GL_ind
-
         return {
             "psr": psr,
-            "GL": GL,
-            "GL_induced": GL_ind,
-            "GL_uncorrected": GL_uncorrected,
-            "GL_bias": GL_bias,
+            "GL": self.gl_estimate,
+            "GL_uncorrected": self.gl_uncorrected,
+            "GL_bias": self.gl_bias,
+            "CL": self.cal_err,
+            "EL": self.gl_estimate + self.cal_err,
         }
 
-    def plot(
-        self,
-        ax: plt.Axes = None,
-        plot_bins: bool = True,
-        plot_calibration: bool = True,
-        plot_hist: bool = True,
-        plot_legend: bool = True,
-        plot_cbar: bool = True,
-        fig_kw: dict = None,
-        scatter_kw: dict = None,
-        calibration_kw: dict = None,
-        hist_kw: dict = None,
-        bin_kw: dict = None,
-        legend_kw: dict = None,
-    ) -> plt.Figure:
-        """Plot the grouping diagram.
-
-        Parameters
-        ----------
-        ax : plt.Axes, optional
-            The axis on which to plot. If None, a new figure is created.
-            By default None.
-        plot_bins : bool, optional
-            Whether to plot the vertical lines for bins.
-            By default True.
-        plot_calibration : bool, optional
-            Whether to plot the calibration curve.
-            By default True.
-        plot_hist : bool, optional
-            Whether to plot the x-axis histogram.
-            By default True.
-        plot_legend : bool, optional
-            Whether to plot the legend.
-            By default True.
-        plot_cbar : bool, optional
-            Whether to plot the colorbar.
-            By default True.
-        fig_kw : dict, optional
-            Keyword arguments to pass to plt.subplots.
-            By default None.
-        scatter_kw : dict, optional
-            Keyword arguments to pass to ax.scatter.
-            By default None.
-        calibration_kw : dict, optional
-            Keyword arguments to pass to ax.plot for the calibration curve.
-            By default None.
-        hist_kw : dict, optional
-            Keyword arguments to pass to ax.hist for the x-axis histogram.
-            By default None.
-        bin_kw : dict, optional
-            Keyword arguments to pass to ax.axvline for the bin edges.
-            By default None.
-        legend_kw : dict, optional
-            Keyword arguments to pass to ax.legend.
-            By default None.
-
-        Returns
-        -------
-        plt.Figure
-            The grouping diagram figure.
-        """
-        check_is_fitted(self)
-
-        counts = filter_valid_counts(self.counts_)
-
-        fig = grouping_diagram(
-            frac_pos=self.frac_pos_,
-            counts=counts,
-            mean_scores=self.mean_scores_,
-            bins=self.partitioner_.bins_,
-            ax=ax,
-            plot_bins=plot_bins,
-            plot_calibration=plot_calibration,
-            plot_hist=plot_hist,
-            plot_legend=plot_legend,
-            plot_cbar=plot_cbar,
-            fig_kw=fig_kw,
-            scatter_kw=scatter_kw,
-            calibration_kw=calibration_kw,
-            hist_kw=hist_kw,
-            bin_kw=bin_kw,
-            legend_kw=legend_kw,
-        )
-
-        return fig
+    def plot(self):
+        self.partitioner.plot()
+        return self
 
     def is_fitted(self):
         return (
-            hasattr(self, "frac_pos_")
-            and hasattr(self, "counts_")
-            and hasattr(self, "mean_scores_")
-            and hasattr(self, "c_hat_")
-            and hasattr(self, "y_bins_")
+            hasattr(self, "gl_estimate")
+            and hasattr(self, "gl_bias")
+            and hasattr(self, "gl_uncorrected")
         )
 
     def __format__(self, psr: str) -> str:
@@ -736,16 +846,15 @@ class GLEstimator:
 
         if self.is_fitted():
             if not psr:
-                psr = "brier"
+                psr = "Brier"
 
             metrics = self.metrics(psr)
 
             extra = (
-                f"  Scoring Rule      : {psr}\n"
+                f"  Scoring Rule      : {psr}: {self.brier:.4f}\n"
                 f"  Grouping loss     : {metrics['GL']:.4f}\n"
-                f"   ↳ Uncorrected GL : {metrics['GL_uncorrected']:.4f}\n"
-                f"   ↳ Bias           : {metrics['GL_bias']:.4f}\n"
-                f"   ↳ Binning induced: {metrics['GL_induced']:.4f}\n"
+                f"  Calibration Loss  : {metrics['CL']:.4f}\n"
+                f"  Epistemic Loss    : {metrics['EL']:.4f}\n"
             )
             s = f"{s}\n{extra}"
 
@@ -758,157 +867,102 @@ class GLEstimator:
         return f"{self}"
 
 
-class GLEstimatorCV:
-    """Estimate the grouping loss of a probabilistic classifier.
-
+class RiskEstimator:
+    """
+    Estimate the 0-1 risk of a fitted probabilistic classifier.
+    This class provides methods to estimate the risk of a probabilistic
+    classifier by partitioning the feature space and analyzing calibration
+    residuals within each partition.
     Parameters
     ----------
-    classifier : object
-        The classifier for which to estimate the grouping loss. The
-        classifier must implement a `predict_proba` method.
-    partitioner : {"decision_tree", "decision_stump", "kmean", None}
-                  | Partitioner, optional
-        The partitioning strategy to use for estimating the grouping loss.
-        If string given, use corresponding predefined strategy. If
-        `Partitioner` instance given, use this as partitioner.
-        By default "decision_tree".
-    cv : int, cross-validation generator or an iterable
-        Determines the cross-validation splitting strategy using
-        `sklearn.model_selection._split.check_cv`. See scikit-learn doc
-        for more details (e.g. `sklearn.model_selection.cross_validate`).
-    random_state : int, optional
-        Controls the randomness of the estimator used in the partitioner.
-        By default None.
-    verbose : int, optional
-        Whether to print progress. By default 0.
-
+    partitioning_estimate : str or PartitioningEstimate, default="decision_tree"
+        The partitioning strategy to use for estimating the risk.
+        If string, must be one of {"decision_tree", "decision_stump", "kmeans", None}.
+        If PartitioningEstimate instance, uses the provided partitioner.
+    train_size : float, default=0.5
+        The proportion of the dataset to use for training the partitioner.
+        The remaining data is used for evaluation to avoid overfitting.
+    random_state : int, default=None
+        Controls the randomness of the partitioner and data splitting.
+    verbose : int, default=0
+        Controls the verbosity of output during fitting and estimation.
+        Higher values produce more detailed output.
+    Attributes
+    ----------
+    partitioner : PartitioningEstimate
+        The fitted partitioning estimator.
     """
 
     def __init__(
         self,
-        classifier,
-        partitioner="decision_tree",
-        cv=None,
-        random_state: int = None,  # not the rs of the cv
+        partitioning_estimate: str | PartitioningEstimate = "decision_tree",
+        train_size: float = 0.5,
+        random_state: int = None,
         verbose: int = 0,
-    ):
-        self.classifier = classifier
-        self.partitioner = partitioner
-        self.cv = cv
+        residual_estimator: ResidualEstimator = None,
+        # t: float = 0.5,
+    ) -> None:
+        self.partitioner = PartitioningEstimate(partitioning_estimate)
+        self.train_size = train_size
         self.random_state = random_state
         self.verbose = verbose
+        self.residual_estimator = (
+            ResidualEstimator(residual_estimator)
+            if residual_estimator is not None
+            else None
+        )
+        # self.t = t
 
-    def GL(self, psr: str = "brier"):
-        if not self.is_fitted():
-            raise ValueError("GLEstimatorCV is not fitted.")
-        return np.array([glest.GL(psr) for glest in self.glests_])
+    def fit(self, X, y_scores, y_true, seed: int = 42):
+        if self.residual_estimator is not None:
+            self.residual_estimator.fit(X, y_scores, y_true, seed=seed)
+        else:
+            self.partitioner.fit(X, y_scores, y_true, seed=seed)
+        return self
 
-    def GL_uncorrected(self, psr: str = "brier"):
-        if not self.is_fitted():
-            raise ValueError("GLEstimatorCV is not fitted.")
-        return np.array([glest.GL_uncorrected(psr) for glest in self.glests_])
-
-    def GL_bias(self, psr: str = "brier"):
-        if not self.is_fitted():
-            raise ValueError("GLEstimatorCV is not fitted.")
-        return np.array([glest.GL_bias(psr) for glest in self.glests_])
-
-    def GL_induced(self, psr: str = "brier"):
-        if not self.is_fitted():
-            raise ValueError("GLEstimatorCV is not fitted.")
-        return np.array([glest.GL_induced(psr) for glest in self.glests_])
-
-    def fit(self, X, y, groups=None):
-        """Fit a GLEstimator instance on each of the train/test split yield
-        by `cv`. Each instance is stored in the `glests_` attribute.
+    def compute_regret(self, C: np.ndarray, t: np.ndarray, a: np.ndarray) -> np.ndarray:
+        """Compute Regret estimations.
 
         Parameters
         ----------
-        X : array-like of shape (n, d)
-            The features.
-        y : array-like of shape (n,)
-            The binary labels.
-        groups : array-like of shape (n,), optional
-            Group labels for the samples used while splitting the dataset into
-            train/test set. Only used in conjunction with a “Group” cv
-            instance. See `sklearn.model_selection.cross_validate` for
-            details. By default None.
+        C : np.ndarray of shape (n,)
+            The calibrated scores of each samples.
+        t : np.ndarray of shape (k,)
+            The thresholds t* derived from the utilities.
+        a : np.ndarray of shape (n, k)
+            The action taken on each sample.
 
         Returns
         -------
-        GLEstimatorCV
-            The fitted instance.
+        RCL : np.ndarray of shape (n, k)
+            The regret of the estimated probabilities to the calibrated scores.
+
         """
-        X, y, groups = indexable(X, y, groups)
-        cv = check_cv(self.cv, y=y, classifier=True)
-        indices = cv.split(X, y, groups)
-        glests: List[GLEstimator] = []
-        for i, (train, test) in enumerate(indices):
-            if self.verbose > 0:
-                print(f"Split {i+1}/{cv.get_n_splits()}")
-            glest = GLEstimator(
-                classifier=self.classifier,
-                partitioner=self.partitioner,
-                random_state=self.random_state,
-                verbose=self.verbose - 1,
-            )
-            glest.fit(X[train], y[train], test_data=(X[test], y[test]))
-            glests.append(glest)
+        a_star = (C >= t).astype(int)  # (n,)
+        R = np.zeros(C.shape[0])  # (n,)
+        idx_disagreement = a.flatten() != a_star  # (n,)
+        R[idx_disagreement] = np.abs(C - t)[idx_disagreement]
 
-        self.glests_ = glests
-        self.cv_ = cv
+        return R  # (n,)
 
+    def predict(self, X, y_scores, t):
+        if self.residual_estimator is not None:
+            r_hat = self.residual_estimator.predict(X)
+            c_hat = self.residual_estimator.calibrator.predict(y_scores)
+        else:
+            r_hat = self.partitioner.predict(X)
+            c_hat = self.partitioner.calibrator.predict(y_scores)
+        a = (y_scores >= t).astype(int)
+        RCL = self.compute_regret(c_hat, t, a)
+
+        REL = self.compute_regret(c_hat + r_hat, t, a)
+        return RCL, REL
+
+    def predict_total(self, X, y_scores, t):
+        RCL, REL = self.predict(X, y_scores, t)
+
+        return RCL.mean(), REL.mean()
+
+    def plot(self):
+        self.partitioner.plot()
         return self
-
-    def is_fitted(self):
-        return hasattr(self, "glests_")
-
-    def metrics(self, psr: str = "brier"):
-        if not self.is_fitted():
-            raise ValueError('GLEstimator must be fitted to call "metrics".')
-
-        GL_ind = self.GL_induced(psr)
-        GL_uncorrected = self.GL_uncorrected(psr)
-        GL_bias = self.GL_bias(psr)
-        GL = GL_uncorrected - GL_bias - GL_ind
-
-        return {
-            "psr": psr,
-            "GL": GL,
-            "GL_induced": GL_ind,
-            "GL_uncorrected": GL_uncorrected,
-            "GL_bias": GL_bias,
-        }
-
-    def __format__(self, psr: str) -> str:
-        """Print the computed average metrics with variance."""
-        s = "GLEstimatorCV()"
-
-        def format_trials(values):
-            mean = np.mean(values)
-            std = np.std(values)
-            return f"{mean:.4f} ({std:.4f})"
-
-        if self.is_fitted():
-            if not psr:
-                psr = "brier"
-
-            metrics = self.metrics(psr)
-
-            extra = (
-                # f"  Splits            : {self.cv_}\n"
-                f"  Scoring rule      : {psr}\n"
-                f"  Grouping loss     : {format_trials(metrics['GL'])}\n"
-                f"   ↳ Uncorrected GL : {format_trials(metrics['GL_uncorrected'])}\n"
-                f"   ↳ Bias           : {format_trials(metrics['GL_bias'])}\n"
-                f"   ↳ Binning induced: {format_trials(metrics['GL_induced'])}\n"
-            )
-            s = f"{s}\n{extra}"
-
-        return s
-
-    def __str__(self) -> str:
-        return f"{self}"
-
-    def __repr__(self) -> str:
-        return f"{self}"
