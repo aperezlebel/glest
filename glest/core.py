@@ -18,11 +18,11 @@ from .helpers import (
 )
 from .plot import grouping_diagram
 from sklearn.utils.validation import indexable
-from sklearn.base import clone
+from sklearn.base import clone, BaseEstimator
 from typing import List
 
 
-class Partitioner:
+class Partitioner(BaseEstimator):
     """A class for partitionning the feature space, stratified by level sets
     of predicted probabilities.
 
@@ -327,7 +327,7 @@ class Partitioner:
         return labels
 
 
-class GLEstimator:
+class GLEstimator(BaseEstimator):
     """Estimate the grouping loss of a fitted probabilistic classifier.
 
     Parameters
