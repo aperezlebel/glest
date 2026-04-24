@@ -1,3 +1,3 @@
-__version__ = "0.0.1-alpha.1"
+__version__ = "0.0.1"
 
 from .core import GLEstimator, GLEstimatorCV, Partitioner
